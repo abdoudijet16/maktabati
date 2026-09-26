@@ -250,14 +250,18 @@ async function importFromSqlite(buf, progressCb) {
 /* -------------------------------------------------------------------- */
 /* App state + screens                                                   */
 /* -------------------------------------------------------------------- */
-const state = { books: [], currentBook: null, currentPage: 1, filter: "", category: "" };
+const state = { books: [], currentBook: null, currentPage: 1, filter: "", viewMode: "all", groupSelection: null };
 
 const els = {
   libraryScreen: document.getElementById("libraryScreen"),
   readerScreen: document.getElementById("readerScreen"),
   bookGrid: document.getElementById("bookGrid"),
   emptyState: document.getElementById("emptyState"),
-  categoryChips: document.getElementById("categoryChips"),
+  viewTabs: document.getElementById("viewTabs"),
+  groupHeader: document.getElementById("groupHeader"),
+  groupHeaderTitle: document.getElementById("groupHeaderTitle"),
+  groupBackBtn: document.getElementById("groupBackBtn"),
+  groupList: document.getElementById("groupList"),
   titleBar: document.getElementById("titleBar"),
   backBtn: document.getElementById("backBtn"),
   searchBtn: document.getElementById("searchBtn"),
@@ -273,33 +277,88 @@ const els = {
   bookmarkBtn: document.getElementById("bookmarkBtn"),
 };
 
+els.viewTabs.querySelectorAll(".view-tab").forEach((btn) => {
+  btn.onclick = () => {
+    state.viewMode = btn.dataset.mode;
+    state.groupSelection = null;
+    els.viewTabs.querySelectorAll(".view-tab").forEach((b) => b.classList.toggle("active", b === btn));
+    renderLibraryView();
+  };
+});
+els.groupBackBtn.onclick = () => {
+  state.groupSelection = null;
+  renderLibraryView();
+};
+
 async function refreshLibrary() {
   state.books = await getAllBooks();
-  renderCategoryChips();
-  renderBookGrid();
+  renderLibraryView();
 }
 
-function renderCategoryChips() {
-  const cats = Array.from(new Set(state.books.map((b) => b.category))).sort();
-  els.categoryChips.innerHTML = "";
-  if (!cats.length) return;
-  const all = document.createElement("div");
-  all.className = "chip" + (state.category === "" ? " active" : "");
-  all.textContent = "الكل";
-  all.onclick = () => { state.category = ""; renderCategoryChips(); renderBookGrid(); };
-  els.categoryChips.appendChild(all);
-  cats.forEach((c) => {
-    const chip = document.createElement("div");
-    chip.className = "chip" + (state.category === c ? " active" : "");
-    chip.textContent = c;
-    chip.onclick = () => { state.category = c; renderCategoryChips(); renderBookGrid(); };
-    els.categoryChips.appendChild(chip);
-  });
+// Arabic-aware comparator so author/category names sort the way an Arabic
+// reader expects, not by raw code-point order.
+const arCollator = new Intl.Collator("ar");
+
+function groupCounts(field) {
+  const counts = new Map();
+  for (const b of state.books) {
+    const key = (b[field] || "").trim() || "غير معروف";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Array.from(counts.entries()).sort((a, b) => arCollator.compare(a[0], b[0]));
 }
 
-async function renderBookGrid() {
-  let list = state.books;
-  if (state.category) list = list.filter((b) => b.category === state.category);
+function renderLibraryView() {
+  if (state.viewMode === "all") {
+    els.groupHeader.style.display = "none";
+    els.groupList.style.display = "none";
+    els.bookGrid.style.display = "";
+    renderBookGrid(state.books);
+    return;
+  }
+
+  const field = state.viewMode === "author" ? "author" : "category";
+
+  if (!state.groupSelection) {
+    // Show the list of authors/categories themselves, not books yet.
+    els.groupHeader.style.display = "none";
+    els.bookGrid.style.display = "none";
+    els.groupList.style.display = "";
+    els.emptyState.style.display = "none";
+
+    let entries = groupCounts(field);
+    if (state.filter) {
+      const q = state.filter.toLowerCase();
+      entries = entries.filter(([name]) => name.toLowerCase().includes(q));
+    }
+    els.groupList.innerHTML = "";
+    if (!entries.length && state.books.length) {
+      els.groupList.innerHTML = `<div class="empty-state" style="height:auto; padding:30px 0;"><p>لا توجد نتائج</p></div>`;
+    }
+    entries.forEach(([name, count]) => {
+      const item = document.createElement("div");
+      item.className = "group-item";
+      item.innerHTML = `<span class="group-name">${escapeHtml(name)}</span><span class="group-count">${count} كتاب</span>`;
+      item.onclick = () => {
+        state.groupSelection = name;
+        renderLibraryView();
+      };
+      els.groupList.appendChild(item);
+    });
+    return;
+  }
+
+  // Drilled into one author/category: show its books.
+  els.groupList.style.display = "none";
+  els.bookGrid.style.display = "";
+  els.groupHeader.style.display = "flex";
+  els.groupHeaderTitle.textContent = state.groupSelection;
+  const filtered = state.books.filter((b) => (b[field] || "غير معروف") === state.groupSelection);
+  renderBookGrid(filtered);
+}
+
+async function renderBookGrid(baseList) {
+  let list = baseList;
   if (state.filter) {
     const q = state.filter.toLowerCase();
     list = list.filter((b) => (b.title || "").toLowerCase().includes(q) || (b.author || "").toLowerCase().includes(q));
@@ -346,7 +405,7 @@ function closeReader() {
   els.searchBtn.style.display = "flex";
   els.bookmarkBtn.style.display = "none";
   els.titleBar.textContent = "📚 مكتبتي الدينية الشاملة";
-  renderBookGrid();
+  renderLibraryView();
 }
 
 async function renderPage(direction) {
@@ -405,16 +464,14 @@ els.searchBtn.onclick = () => {
 };
 els.searchInput.addEventListener("input", (e) => {
   state.filter = e.target.value.trim();
-  renderBookGrid();
+  renderLibraryView();
 });
 
 /* ---------------- Settings sheet: choose database source ---------------- */
 const settingsEls = {
   overlay: els.settingsOverlay,
+  downloadOption: document.getElementById("pickDownloadOption"),
   folderOption: document.getElementById("pickFolderOption"),
-  zipOption: document.getElementById("pickZipOption"),
-  jsonOption: document.getElementById("pickJsonOption"),
-  sqliteOption: document.getElementById("pickSqliteOption"),
   progress: document.getElementById("sheetProgress"),
   progressFill: document.getElementById("progressFill"),
   progressLabel: document.getElementById("progressLabel"),
@@ -564,115 +621,83 @@ settingsEls.folderOption.onclick = async () => {
   await updateStats();
 };
 
-settingsEls.zipOption.onclick = async () => {
-  debugLog("تم الضغط على خيار الملف المضغوط.");
-  let picked;
-  try {
-    // Using our own native pickFile (ACTION_OPEN_DOCUMENT), not
-    // FilePicker.pickFiles (ACTION_GET_CONTENT): many file managers treat
-    // ACTION_GET_CONTENT on a .zip as "browse into it" rather than "select
-    // it", and finish with a plain cancel if no selection is finalized -
-    // even when nothing was actually cancelled. OPEN_DOCUMENT means
-    // "hand back this exact file" and is handled far more consistently.
-    picked = await FolderImporter.pickFile();
-  } catch (err) {
-    debugLog("فشل اختيار الملف: " + (err && err.message || err));
-    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
+// Downloads the full library zip (3.1GB, from archive.org) and extracts +
+// imports it, entirely natively (see FolderImporterPlugin.downloadLibrary).
+// This can NOT be done in JS: a 3.1GB file can't be fetched into a JS
+// ArrayBuffer, base64-encoded across the Capacitor bridge, or held in
+// memory by JSZip on a phone - it has to be streamed straight to disk and
+// extracted straight from disk, which only native code can do safely here.
+// Files stream back one at a time via events exactly like the folder
+// picker, so this reuses the same listener plumbing.
+const LIBRARY_ZIP_URL = "https://archive.org/download/machtaba-islamia/machtaba-islamia.zip";
+
+settingsEls.downloadOption.onclick = async () => {
+  debugLog("تم الضغط على خيار التنزيل التلقائي.");
+  if (!FolderImporter) {
+    alert("ميزة التنزيل التلقائي غير متوفرة في هذا الإصدار من التطبيق.");
     return;
   }
-  debugLog(`تم الاختيار: ${picked ? (picked.name || "(بدون اسم)") : "لا شيء"}, حجم البيانات: ${picked && picked.base64 ? (picked.base64.length / 1024 / 1024).toFixed(2) + "MB (base64)" : "لا يوجد"}`);
-  if (!picked || !picked.base64) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
-  if (picked.name && !picked.name.toLowerCase().endsWith(".zip")) {
-    if (!confirm(`الملف المختار "${picked.name}" لا يبدو ملفًا مضغوطًا (.zip). المتابعة على أي حال؟`)) return;
+  if (!confirm("سيتم تنزيل المكتبة كاملة (حوالي 3.1 جيجابايت). يُفضّل استخدام واي فاي وتوفر مساحة تخزين كافية على الهاتف (٦-٧ جيجابايت تقريبًا أثناء التنزيل وفك الضغط). المتابعة؟")) {
+    return;
   }
-  showProgress(true);
-  setProgress(0, 1, "جارٍ فتح الملف المضغوط...");
-  try {
-    const buffer = await base64ToUint8Array(picked.base64);
-    debugLog("جارٍ فتح الأرشيف عبر JSZip...");
-    const zip = await JSZip.loadAsync(buffer);
-    const entries = Object.values(zip.files).filter((f) => !f.dir && f.name.toLowerCase().endsWith(".json"));
-    debugLog(`تم فتح الأرشيف. عدد ملفات JSON الموجودة: ${entries.length}`);
-    let done = 0, added = 0;
-    for (const entry of entries) {
-      done++;
-      setProgress(done, entries.length, `جارٍ الفهرسة... (${done}/${entries.length})`);
-      try {
-        const raw = await entry.async("string");
-        const data = JSON.parse(raw);
-        // category = first path segment, if the json sits inside a folder
-        const parts = entry.name.split("/").filter(Boolean);
-        const category = parts.length > 1 ? parts[0] : null;
-        const filename = parts[parts.length - 1];
-        const book = parseBookJson(filename, data, category);
-        if (book) { await addParsedBook(book); added++; }
-      } catch (err) { debugLog(`تجاوز ملف تالف (${entry.name}): ${err.message}`); }
-    }
-    debugLog(`اكتملت الفهرسة: أُضيف ${added} من أصل ${entries.length}.`);
-    setProgress(entries.length, entries.length, `تم! أُضيف ${added} كتاب.`);
-  } catch (err) {
-    debugLog("خطأ أثناء معالجة الملف المضغوط: " + (err && err.message || err));
-    setProgress(0, 1, "تعذّر قراءة الملف المضغوط: " + err.message);
-  } finally {
-    await updateStats();
-  }
-};
 
-settingsEls.jsonOption.onclick = async () => {
-  debugLog("تم الضغط على خيار ملفات JSON.");
+  showProgress(true);
+  setProgress(0, 100, "جارٍ التنزيل... 0%");
+
+  let done = 0, added = 0, skippedCount = 0;
+
+  const progressListener = await FolderImporter.addListener("downloadProgress", (info) => {
+    if (info.phase === "downloading") {
+      const pct = info.totalBytes > 0 ? Math.round((info.bytesDone / info.totalBytes) * 100) : 0;
+      setProgress(pct, 100, `جارٍ التنزيل... ${pct}% (${(info.bytesDone / 1024 / 1024).toFixed(0)}MB)`);
+    } else if (info.phase === "extracting") {
+      setProgress(100, 100, `جارٍ فك الضغط... ${info.filesExtracted ?? ""}`);
+    }
+  });
+
+  const fileListener = await FolderImporter.addListener("downloadImportFile", async (file) => {
+    done++;
+    setProgress(done, done, `جارٍ الفهرسة... (${done}) ${file.name}`);
+    try {
+      if (file.type === "json") {
+        const data = JSON.parse(file.text);
+        const parts = (file.relPath || file.name).split("/").filter(Boolean);
+        const category = parts.length > 1 ? parts[0] : null;
+        const book = parseBookJson(file.name, data, category);
+        if (book) { await addParsedBook(book); added++; }
+      } else if (file.type === "sqlite") {
+        const buf = await base64ToUint8Array(file.base64);
+        const n = await importFromSqlite(buf, () => {});
+        added += n;
+      }
+    } catch (err) {
+      debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
+    }
+  });
+
+  const skipListener = await FolderImporter.addListener("downloadImportSkipped", (info) => {
+    skippedCount++;
+    const sizeNote = info.sizeMB ? `, ${info.sizeMB.toFixed(1)}MB` : "";
+    debugLog(`تم تجاوز ${info.relPath} (${info.reason}${sizeNote})`);
+  });
+
   let result;
   try {
-    result = await FolderImporter.pickFilesMulti();
+    result = await FolderImporter.downloadLibrary({ url: LIBRARY_ZIP_URL });
   } catch (err) {
-    debugLog("فشل اختيار الملفات: " + (err && err.message || err));
-    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملفات: " + (err && err.message || err));
-    return;
-  }
-  const files = (result.files || []).filter((f) => f.base64);
-  debugLog(`تم اختيار ${files.length} ملف: ${files.map((f) => f.name).join(", ")}`);
-  if (!files.length) { alert("تعذّر قراءة الملفات: لم يتم استلام بيانات."); return; }
-  showProgress(true);
-  let done = 0, added = 0;
-  for (const file of files) {
-    done++;
-    setProgress(done, files.length, `جارٍ الفهرسة... (${done}/${files.length})`);
-    try {
-      const text = await base64ToUtf8Text(file.base64);
-      const data = JSON.parse(text);
-      const book = parseBookJson(file.name, data, null);
-      if (book) { await addParsedBook(book); added++; }
-    } catch (err) { debugLog(`تجاوز ملف تالف (${file.name}): ${err.message}`); }
-  }
-  debugLog(`اكتملت الفهرسة: أُضيف ${added} من أصل ${files.length}.`);
-  setProgress(files.length, files.length, `تم! أُضيف ${added} كتاب.`);
-  await updateStats();
-};
-
-settingsEls.sqliteOption.onclick = async () => {
-  debugLog("تم الضغط على خيار SQLite.");
-  let picked;
-  try {
-    picked = await FolderImporter.pickFile();
-  } catch (err) {
-    debugLog("فشل اختيار الملف: " + (err && err.message || err));
-    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
-    return;
-  }
-  debugLog(`تم الاختيار: ${picked ? (picked.name || "(بدون اسم)") : "لا شيء"}`);
-  if (!picked || !picked.base64) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
-  showProgress(true);
-  setProgress(0, 1, "جارٍ فتح قاعدة البيانات...");
-  try {
-    const buf = await base64ToUint8Array(picked.base64);
-    const added = await importFromSqlite(buf, (done, total, label) => setProgress(done, total, label));
-    debugLog(`تم استيراد قاعدة البيانات: أُضيف ${added} كتاب.`);
-    setProgress(1, 1, `تم! أُضيف ${added} كتاب.`);
-  } catch (err) {
-    debugLog("خطأ أثناء معالجة قاعدة البيانات: " + (err && err.message || err));
-    setProgress(0, 1, "تعذّر قراءة قاعدة البيانات: " + err.message);
-  } finally {
+    debugLog("فشل التنزيل: " + (err && err.message || err));
+    alert("فشل تنزيل المكتبة: " + (err && err.message || err));
+    await progressListener.remove(); await fileListener.remove(); await skipListener.remove();
     await updateStats();
+    return;
   }
+  await progressListener.remove();
+  await fileListener.remove();
+  await skipListener.remove();
+
+  debugLog(`اكتمل التنزيل والاستيراد. أُضيف ${added} كتاب من ${done} ملف. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
+  await updateStats();
 };
 
 /* ---------------- Boot ---------------- */

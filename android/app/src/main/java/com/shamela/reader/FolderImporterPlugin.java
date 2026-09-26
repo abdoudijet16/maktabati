@@ -36,7 +36,15 @@ import java.nio.charset.StandardCharsets;
  *    once, but nothing in the web layer can walk that tree - only native code can,
  *    via DocumentFile - so this small native plugin does exactly that and nothing more.
  */
-@CapacitorPlugin(name = "FolderImporter")
+@CapacitorPlugin(
+    name = "FolderImporter",
+    permissions = {
+        @com.getcapacitor.annotation.Permission(
+            strings = { android.Manifest.permission.POST_NOTIFICATIONS },
+            alias = "notifications"
+        )
+    }
+)
 public class FolderImporterPlugin extends Plugin {
 
     /**
@@ -202,6 +210,90 @@ public class FolderImporterPlugin extends Plugin {
             }
         }).start();
     }
+
+    /**
+     * Downloads a (potentially very large - the real library is 3.1GB) zip file
+     * from `url`, extracts it, and imports every .json/.db/.sqlite file inside -
+     * all natively, all streamed straight to/from disk. This can't be done from
+     * JS: a file this size can't be fetched into a JS ArrayBuffer, base64-encoded
+     * across the Capacitor bridge, or held in memory by a JS zip library on a
+     * phone. Everything here is written to and read from an app-private folder
+     * (Context.getFilesDir()) - not part of the regular Downloads/Documents
+     * folders a file manager shows, and not reachable by other apps.
+     *
+     * The actual work runs in LibraryDownloadService, a foreground service with
+     * a persistent notification - not a plain background thread. A plain thread
+     * gets killed by Android (Doze/App Standby/OEM battery managers) as soon as
+     * the app is backgrounded or the screen locks, which would silently abort a
+     * download that can take several minutes. A foreground service is exempt
+     * from those background execution limits for as long as its notification is
+     * showing, so the download survives the user switching away or locking the
+     * screen.
+     */
+    @PluginMethod
+    public void downloadLibrary(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || url.isEmpty()) { call.reject("لم يتم تحديد رابط التنزيل."); return; }
+
+        // Android 13+ requires this runtime permission just to SHOW the
+        // notification - it does not affect whether the foreground service
+        // itself is allowed to run and stay alive. If denied, the download
+        // still proceeds and still survives backgrounding; the person just
+        // won't see a progress notification for it.
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && getPermissionState("notifications") != com.getcapacitor.PermissionState.GRANTED) {
+            requestPermissionForAlias("notifications", call, "downloadPermCallback");
+            return;
+        }
+        startDownload(call, url);
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void downloadPermCallback(PluginCall call) {
+        String url = call.getString("url");
+        startDownload(call, url); // proceed regardless of grant/deny - see comment above
+    }
+
+    private void startDownload(PluginCall call, String url) {
+        activeInstance = this;
+        pendingDownloadCall = call;
+        Intent serviceIntent = new Intent(getContext(), LibraryDownloadService.class);
+        serviceIntent.putExtra("url", url);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            getContext().startForegroundService(serviceIntent);
+        } else {
+            getContext().startService(serviceIntent);
+        }
+    }
+
+    private static FolderImporterPlugin activeInstance;
+    private PluginCall pendingDownloadCall;
+
+    /** Called by LibraryDownloadService (different class, same process) to emit progress/file events to JS. */
+    public void emitDownloadEvent(String name, JSObject data) {
+        notifyListeners(name, data);
+    }
+
+    /** Called by LibraryDownloadService when the whole download+extract+import finishes successfully. */
+    public void resolveDownloadCall(int scanned, int skipped) {
+        if (pendingDownloadCall != null) {
+            JSObject ret = new JSObject();
+            ret.put("scannedCount", scanned);
+            ret.put("skippedCount", skipped);
+            pendingDownloadCall.resolve(ret);
+            pendingDownloadCall = null;
+        }
+    }
+
+    /** Called by LibraryDownloadService if anything fails. */
+    public void rejectDownloadCall(String message) {
+        if (pendingDownloadCall != null) {
+            pendingDownloadCall.reject(message);
+            pendingDownloadCall = null;
+        }
+    }
+
+    public static FolderImporterPlugin getActiveInstance() { return activeInstance; }
 
     private static final long MAX_SINGLE_FILE_BYTES = 60L * 1024 * 1024; // 60MB safety cap per file
 

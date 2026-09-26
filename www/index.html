@@ -34,7 +34,16 @@
 
 <!-- ============ SCREEN 1: BOOK LIST ============ -->
 <div class="screen" id="libraryScreen">
-  <div class="chip-row" id="categoryChips"></div>
+  <div class="view-tabs" id="viewTabs">
+    <button class="view-tab active" data-mode="all">الكل</button>
+    <button class="view-tab" data-mode="author">المؤلف</button>
+    <button class="view-tab" data-mode="category">التصنيف</button>
+  </div>
+  <div class="group-header" id="groupHeader" style="display:none">
+    <button class="group-back" id="groupBackBtn">‹ رجوع</button>
+    <span id="groupHeaderTitle"></span>
+  </div>
+  <div class="group-list" id="groupList" style="display:none"></div>
   <div class="book-grid" id="bookGrid"></div>
   <div class="empty-state" id="emptyState" style="display:none">
     <div class="empty-icon">📖</div>
@@ -63,32 +72,27 @@
     <h2>مصدر مكتبة الكتب</h2>
     <p class="sheet-desc">اختر كيف تريد تحميل قاعدة بيانات الكتب على الهاتف.</p>
 
+    <div class="setup-notice" style="background:#fff8e1; border:1px solid #f0d98a; border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:13px; line-height:1.9;">
+      <strong>طريقة الإعداد:</strong>
+      <ol style="margin:6px 0 0; padding-inline-start:20px;">
+        <li>إمّا اضغط <strong>"تنزيل المكتبة تلقائيًا"</strong> أدناه (الملف كبير جدًا: 3.1 جيجابايت، يُفضّل عبر واي فاي)،</li>
+        <li>أو نزّل الملف يدويًا من <a href="https://archive.org/details/machtaba-islamia" target="_blank" rel="noopener">archive.org/details/machtaba-islamia</a>، فك ضغطه بـ <strong>WinRAR</strong> على الكمبيوتر، انسخ المجلد الناتج إلى الهاتف، ثم اضغط <strong>"مجلد كامل"</strong> واخترهُ.</li>
+      </ol>
+      <div style="margin-top:4px;">لا حاجة لتحديد نوع الملفات — يتم التعرّف عليها (JSON أو SQLite) تلقائيًا في الحالتين.</div>
+    </div>
+
+    <div class="source-option" id="pickDownloadOption">
+      <div class="source-icon">⬇️</div>
+      <div>
+        <div class="source-title">تنزيل المكتبة تلقائيًا</div>
+        <div class="source-sub">يقوم التطبيق بتنزيل المكتبة كاملة (3.1 جيجابايت، 7683 كتاب) وفك ضغطها واستيرادها تلقائيًا</div>
+      </div>
+    </div>
     <div class="source-option" id="pickFolderOption">
       <div class="source-icon">📁</div>
       <div>
         <div class="source-title">مجلد كامل (مع مجلداته الفرعية)</div>
-        <div class="source-sub">اختر مجلد المكتبة مرة واحدة، وسيتم قراءة كل ملفات JSON و SQLite بداخله وبداخل مجلداته الفرعية تلقائيًا</div>
-      </div>
-    </div>
-    <div class="source-option" id="pickZipOption">
-      <div class="source-icon">🗜️</div>
-      <div>
-        <div class="source-title">ملف مضغوط (.zip)</div>
-        <div class="source-sub">يحتوي على مجلدات الأقسام وملفات JSON بداخلها، أو حتى ملف library.db</div>
-      </div>
-    </div>
-    <div class="source-option" id="pickJsonOption">
-      <div class="source-icon">🧾</div>
-      <div>
-        <div class="source-title">ملفات JSON عادية</div>
-        <div class="source-sub">اختر ملف أو أكثر مباشرة بدون ضغط</div>
-      </div>
-    </div>
-    <div class="source-option" id="pickSqliteOption">
-      <div class="source-icon">🗄️</div>
-      <div>
-        <div class="source-title">قاعدة بيانات SQLite (.db)</div>
-        <div class="source-sub">استيراد مباشر من library.db (جداول books / pages / toc)</div>
+        <div class="source-sub">اختر مجلدًا نزّلته/فككت ضغطه يدويًا، وسيتم قراءة كل ما بداخله تلقائيًا</div>
       </div>
     </div>
     <div class="sheet-progress" id="sheetProgress" style="display:none">
@@ -118,7 +122,6 @@
   </div>
 </div>
 
-<script src="vendor/jszip.min.js"></script>
 <script src="vendor/sql-wasm.js"></script>
 <script src="app.js"></script>
 </body>

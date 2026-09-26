@@ -49,6 +49,27 @@ body{
 }
 .chip.active{background:var(--accent); color:var(--accent-ink);}
 
+.view-tabs{display:flex; gap:6px; padding:10px 12px 4px;}
+.view-tab{
+  flex:1; padding:8px 4px; border:none; border-radius:10px; background:var(--chip);
+  font-size:13px; font-weight:600; color:var(--ink-soft); cursor:pointer;
+}
+.view-tab.active{background:var(--accent); color:var(--accent-ink);}
+
+.group-header{display:flex; align-items:center; gap:10px; padding:6px 12px;}
+.group-back{background:none; border:none; font-size:15px; color:var(--accent); cursor:pointer; padding:4px 2px;}
+#groupHeaderTitle{font-size:15px; font-weight:700;}
+
+.group-list{padding:4px 12px 12px;}
+.group-item{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 12px; border-radius:10px; background:var(--card, #fff);
+  margin-bottom:8px; cursor:pointer;
+}
+.group-item:active{transform:scale(0.98);}
+.group-item .group-name{font-size:14px; font-weight:700;}
+.group-item .group-count{font-size:12px; color:var(--ink-soft);}
+
 .book-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:12px; padding:6px 12px 24px;}
 .book-card{
   background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:14px 10px;

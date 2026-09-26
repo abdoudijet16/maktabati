@@ -7,8 +7,9 @@ A mobile, offline rebuild of ShamelaReader:
 - **Screen 2 — Reader**: tap a book → swipe **left/right** to turn pages, page counter at the bottom (`12 / 300`).
 - **Top bar**: icon-only (back, search, bookmark, settings/gear) — no text buttons.
 - **Settings (gear icon)**: lets you load the book database from either
-  - a **.zip** of category folders full of `.json` books (same shape `indexer.py` expects), or
-  - plain **.json** files picked directly.
+  - a **folder** (picked once, read recursively including subfolders) of category folders full of `.json` books (same shape `indexer.py` expects) and/or `.db`/`.sqlite` files — the app auto-detects each file's type, no need to pick a type, or
+  - plain **.json** files picked directly, or
+  - a **SQLite** `.db` file picked directly.
   Everything is parsed in-app and stored in the phone's own local database (IndexedDB), so it works fully offline after the first load — no Flask server involved.
 
 This is a [Capacitor](https://capacitorjs.com) project: the `www/` folder is the actual app (plain HTML/CSS/JS, no build step needed to *edit* it), and `android/` is the generated native Android Studio project that wraps it into a real `.apk`.
@@ -38,10 +39,15 @@ Building a real Android package requires the Android SDK/Gradle plugin, which Go
 - App name / package id: edit `capacitor.config.json` (`appName`, `appId`) before running `cap sync`.
 
 ## Loading your book library on the phone
-database https://archive.org/details/machtaba-islamia
-Open the app → tap the gear icon (top bar) → choose:
-- **ملف مضغوط (.zip)** — a zip of your `extracted_books/` folder (category subfolders of `.json` files), or
-- **ملفات JSON عادية** — select one or more `.json` book files directly, or
-- **قاعدة بيانات SQLite (.db)** — import `library.db` directly (the file `indexer.py` already builds). The app reads it in-browser with `sql.js` (https://archive.org/details/machtaba-islamia)), pulling from the `books`/`pages` tables using the exact schema the desktop app already uses — no conversion needed.
+Download the library: https://archive.org/details/machtaba-islamia
+
+1. On a computer, unzip the downloaded archive with WinRAR (or any zip tool) into a plain folder.
+2. Copy that extracted folder onto the phone (e.g. into its Downloads folder).
+3. Open the app → tap the gear icon (top bar) → **"مجلد كامل (مع مجلداته الفرعية)"** → select that folder.
+   The app reads every `.json` and `.db`/`.sqlite` file inside it and its subfolders automatically — no need to tell it which type each file is.
+
+Two extra options exist for edge cases:
+- **ملفات JSON عادية** — select one or more `.json` book files directly.
+- **قاعدة بيانات SQLite (.db)** — import `library.db` directly (the file `indexer.py` already builds). The app reads it in-browser with `sql.js`, pulling from the `books`/`pages` tables using the exact schema the desktop app already uses — no conversion needed.
 
 Progress is shown live; once done, your books appear on the home screen with reading progress saved automatically as you swipe through pages.
