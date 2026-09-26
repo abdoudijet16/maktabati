@@ -499,7 +499,20 @@ els.settingsBtn.onclick = openSettings;
 document.getElementById("emptyOpenSettings").onclick = openSettings;
 settingsEls.closeBtn.onclick = closeSettings;
 settingsEls.clearBtn.onclick = async () => {
-  if (!confirm("مسح كل الكتب المحمّلة من هذا الجهاز؟")) return;
+  const understood = confirm(
+    "تحذير: حذف المكتبة\n\n" +
+    "سيؤدي هذا إلى حذف جميع الكتب وتقدّم القراءة المحفوظ نهائيًا من داخل هذا التطبيق، ولا يمكن التراجع عن ذلك بعد الحذف.\n\n" +
+    "ملاحظة مهمة: هذا الإجراء لا يقوم بإلغاء تثبيت التطبيق نفسه من الهاتف - فقط يمسح الكتب المستوردة بداخله، ويمكنك بعدها استيراد المكتبة من جديد في أي وقت.\n" +
+    "إذا كنت تريد حذف التطبيق بالكامل من الهاتف بدلاً من ذلك، أغلق هذه الرسالة وقم بإلغاء تثبيت التطبيق من إعدادات الهاتف.\n\n" +
+    "هل تريد المتابعة وحذف مكتبة الكتب من داخل التطبيق؟"
+  );
+  if (!understood) return;
+
+  const finalConfirm = confirm(
+    "تأكيد نهائي: سيتم حذف جميع الكتب وتقدّم القراءة الآن ولن يمكن استرجاعها.\n\nهل أنت متأكد؟"
+  );
+  if (!finalConfirm) return;
+
   await clearLibrary();
   await updateStats();
   refreshLibrary();
