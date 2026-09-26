@@ -1,0 +1,12 @@
+{
+  "appId": "com.shamela.reader",
+  "appName": "مكتبتي الدينية الشاملة",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

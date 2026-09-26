@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>مكتبتي الدينية الشاملة</title>
+<link rel="icon" type="image/png" href="icon/icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ TOP BAR (icon-only) ============ -->
+<div class="topbar">
+  <button class="icon-btn" id="backBtn" style="display:none" title="رجوع">
+    <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="brand" id="titleBar">📚 مكتبتي الدينية الشاملة</div>
+  <div class="top-actions">
+    <button class="icon-btn" id="searchBtn" title="بحث">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="bookmarkBtn" style="display:none" title="إشارة مرجعية">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4V3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn" id="settingsBtn" title="الإعدادات">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="search-bar" id="searchBar" style="display:none">
+  <input type="text" id="searchInput" placeholder="ابحث عن كتاب أو مؤلف...">
+</div>
+
+<!-- ============ SCREEN 1: BOOK LIST ============ -->
+<div class="screen" id="libraryScreen">
+  <div class="chip-row" id="categoryChips"></div>
+  <div class="book-grid" id="bookGrid"></div>
+  <div class="empty-state" id="emptyState" style="display:none">
+    <div class="empty-icon">📖</div>
+    <p>لا توجد كتب بعد</p>
+    <button class="primary-btn" id="emptyOpenSettings">إضافة مكتبة الكتب</button>
+  </div>
+  <div class="library-footer">المحتوى من <a href="https://shamela.ws" target="_blank" rel="noopener">المكتبة الشاملة — shamela.ws</a></div>
+</div>
+
+<!-- ============ SCREEN 2: READER ============ -->
+<div class="screen" id="readerScreen" style="display:none">
+  <div class="reader-pager" id="readerPager">
+    <div class="page-slide" id="pageText"></div>
+  </div>
+  <div class="reader-footer">
+    <button class="page-nav" id="prevPageBtn">‹</button>
+    <div class="page-counter" id="pageCounter">1 / 1</div>
+    <button class="page-nav" id="nextPageBtn">›</button>
+  </div>
+</div>
+
+<!-- ============ SETTINGS / DATABASE SOURCE SHEET ============ -->
+<div class="sheet-overlay" id="settingsOverlay" style="display:none">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h2>مصدر مكتبة الكتب</h2>
+    <p class="sheet-desc">اختر كيف تريد تحميل قاعدة بيانات الكتب على الهاتف.</p>
+
+    <div class="source-option" id="pickFolderOption">
+      <div class="source-icon">📁</div>
+      <div>
+        <div class="source-title">مجلد كامل (مع مجلداته الفرعية)</div>
+        <div class="source-sub">اختر مجلد المكتبة مرة واحدة، وسيتم قراءة كل ملفات JSON و SQLite بداخله وبداخل مجلداته الفرعية تلقائيًا</div>
+      </div>
+    </div>
+    <div class="source-option" id="pickZipOption">
+      <div class="source-icon">🗜️</div>
+      <div>
+        <div class="source-title">ملف مضغوط (.zip)</div>
+        <div class="source-sub">يحتوي على مجلدات الأقسام وملفات JSON بداخلها، أو حتى ملف library.db</div>
+      </div>
+    </div>
+    <div class="source-option" id="pickJsonOption">
+      <div class="source-icon">🧾</div>
+      <div>
+        <div class="source-title">ملفات JSON عادية</div>
+        <div class="source-sub">اختر ملف أو أكثر مباشرة بدون ضغط</div>
+      </div>
+    </div>
+    <div class="source-option" id="pickSqliteOption">
+      <div class="source-icon">🗄️</div>
+      <div>
+        <div class="source-title">قاعدة بيانات SQLite (.db)</div>
+        <div class="source-sub">استيراد مباشر من library.db (جداول books / pages / toc)</div>
+      </div>
+    </div>
+    <div class="sheet-progress" id="sheetProgress" style="display:none">
+      <div class="sheet-progress-bar"><div class="sheet-progress-fill" id="progressFill"></div></div>
+      <div id="progressLabel">جارٍ التحميل...</div>
+    </div>
+
+    <div class="sheet-stats" id="sheetStats"></div>
+    <div class="sheet-actions">
+      <button class="text-btn" id="clearLibraryBtn">مسح المكتبة الحالية</button>
+      <button class="primary-btn" id="closeSheetBtn">تم</button>
+    </div>
+
+    <!-- DEBUG LOG: shows every error/step on-screen so it can be screenshotted,
+         no computer/USB debugging needed. -->
+    <div id="debugLogBox" style="display:none; margin-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong style="font-size:13px;">سجل التشخيص</strong>
+        <button class="text-btn" id="copyDebugLogBtn" style="font-size:12px;">نسخ</button>
+      </div>
+      <pre id="debugLogText" style="direction:ltr; text-align:left; font-size:11px; max-height:160px; overflow:auto; background:#111; color:#0f0; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all;"></pre>
+    </div>
+
+    <div class="credit-line">
+      محتوى الكتب مصدره <a href="https://shamela.ws" target="_blank" rel="noopener">المكتبة الشاملة — shamela.ws</a>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/sql-wasm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">مكتبتي الدينية الشاملة</string>
+    <string name="title_activity_main">مكتبتي الدينية الشاملة</string>
+    <string name="package_name">com.shamela.reader</string>
+    <string name="custom_url_scheme">com.shamela.reader</string>
+</resources>

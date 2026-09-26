@@ -1,0 +1,19 @@
+{
+  "name": "shamela-reader",
+  "version": "1.0.0",
+  "description": "Shamela Reader - offline Islamic book library reader for Android",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capawesome/capacitor-file-picker": "^6.2.0",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
