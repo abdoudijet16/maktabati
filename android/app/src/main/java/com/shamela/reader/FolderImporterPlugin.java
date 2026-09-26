@@ -39,6 +39,109 @@ import java.nio.charset.StandardCharsets;
 @CapacitorPlugin(name = "FolderImporter")
 public class FolderImporterPlugin extends Plugin {
 
+    /**
+     * Picks ONE file of any type via ACTION_OPEN_DOCUMENT (not ACTION_GET_CONTENT).
+     * OPEN_DOCUMENT explicitly means "hand back this exact document" and is handled
+     * far more consistently across file managers than GET_CONTENT, which many apps
+     * instead treat as "open/browse into this" for container-like files such as
+     * .zip - silently finishing with RESULT_CANCELED if the app never finalizes a
+     * selection, even though the person didn't mean to cancel anything.
+     */
+    @PluginMethod
+    public void pickFile(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(call, intent, "handlePickFileResult");
+    }
+
+    @ActivityCallback
+    private void handlePickFileResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            call.reject("تم إلغاء اختيار الملف.");
+            return;
+        }
+        Uri uri = result.getData().getData();
+        if (uri == null) { call.reject("تعذّر الحصول على مسار الملف."); return; }
+        try {
+            byte[] bytes = readAll(uri);
+            JSObject ret = new JSObject();
+            ret.put("name", queryDisplayName(uri));
+            ret.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("خطأ أثناء قراءة الملف: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Picks MULTIPLE files of any type via ACTION_OPEN_DOCUMENT with
+     * EXTRA_ALLOW_MULTIPLE, for the same reliability reasons as pickFile above.
+     */
+    @PluginMethod
+    public void pickFilesMulti(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(call, intent, "handlePickFilesMultiResult");
+    }
+
+    @ActivityCallback
+    private void handlePickFilesMultiResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            call.reject("تم إلغاء اختيار الملفات.");
+            return;
+        }
+        Intent data = result.getData();
+        JSArray files = new JSArray();
+        try {
+            if (data.getClipData() != null) {
+                int count = data.getClipData().getItemCount();
+                for (int i = 0; i < count; i++) {
+                    Uri uri = data.getClipData().getItemAt(i).getUri();
+                    addFileToArray(uri, files);
+                }
+            } else if (data.getData() != null) {
+                addFileToArray(data.getData(), files);
+            }
+            JSObject ret = new JSObject();
+            ret.put("files", files);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("خطأ أثناء قراءة الملفات: " + e.getMessage());
+        }
+    }
+
+    private void addFileToArray(Uri uri, JSArray files) {
+        try {
+            byte[] bytes = readAll(uri);
+            JSObject fileObj = new JSObject();
+            fileObj.put("name", queryDisplayName(uri));
+            fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            files.put(fileObj);
+        } catch (Exception e) {
+            // skip unreadable file, keep going
+        }
+    }
+
+    private String queryDisplayName(Uri uri) {
+        String name = null;
+        try (android.database.Cursor cursor = getContext().getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) name = cursor.getString(idx);
+            }
+        } catch (Exception ignored) { /* fall through to path-based guess */ }
+        if (name == null) {
+            String path = uri.getPath();
+            if (path != null && path.contains("/")) name = path.substring(path.lastIndexOf('/') + 1);
+        }
+        return name != null ? name : "file";
+    }
+
     @PluginMethod
     public void pickFolder(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);

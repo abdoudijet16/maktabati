@@ -481,15 +481,14 @@ async function base64ToUtf8Text(base64) {
   return new TextDecoder("utf-8").decode(await base64ToUint8Array(base64));
 }
 
-const { FilePicker } = Capacitor.Plugins;
-
-// The browser's <input type="file"> hits a persistent Android WebView bug
-// on some devices/OS versions - "NotReadableError: permission problem...
-// after a reference to file was acquired" - when JS tries to read the
-// picked file's bytes, no matter how it's read. The native FilePicker
-// plugin picks the file via a normal Android intent and hands the bytes
-// back as base64 directly from native code, sidestepping that WebView
-// bug entirely.
+// All file/folder picking now goes through our own native FolderImporter
+// plugin (see FolderImporterPlugin.java), using ACTION_OPEN_DOCUMENT /
+// ACTION_OPEN_DOCUMENT_TREE rather than @capawesome/capacitor-file-picker's
+// ACTION_GET_CONTENT. GET_CONTENT is handled inconsistently by many Android
+// file managers for container-like files such as .zip (some browse into it
+// instead of selecting it, then report a plain cancel even when nothing was
+// actually cancelled). OPEN_DOCUMENT means "hand back this exact file/tree"
+// and every tested file manager honors that the same way.
 const { FolderImporter } = Capacitor.Plugins;
 
 // Pick one top-level folder and import everything inside it (any depth of
@@ -544,28 +543,29 @@ settingsEls.folderOption.onclick = async () => {
 
 settingsEls.zipOption.onclick = async () => {
   debugLog("تم الضغط على خيار الملف المضغوط.");
-  let result;
+  let picked;
   try {
-    // No `types` filter: many Android file providers tag .zip files with
-    // inconsistent/missing MIME types, which makes a strict type filter
-    // grey the file out in the system picker. Accept anything and
-    // validate by extension/content instead.
-    result = await FilePicker.pickFiles({ readData: true });
+    // Using our own native pickFile (ACTION_OPEN_DOCUMENT), not
+    // FilePicker.pickFiles (ACTION_GET_CONTENT): many file managers treat
+    // ACTION_GET_CONTENT on a .zip as "browse into it" rather than "select
+    // it", and finish with a plain cancel if no selection is finalized -
+    // even when nothing was actually cancelled. OPEN_DOCUMENT means
+    // "hand back this exact file" and is handled far more consistently.
+    picked = await FolderImporter.pickFile();
   } catch (err) {
-    debugLog("فشل FilePicker.pickFiles: " + (err && err.message || err));
-    if (!/cancel/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
+    debugLog("فشل اختيار الملف: " + (err && err.message || err));
+    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
     return;
   }
-  const picked = result.files && result.files[0];
-  debugLog(`تم الاختيار: ${picked ? (picked.name || "(بدون اسم)") : "لا شيء"}, حجم البيانات: ${picked && picked.data ? (picked.data.length / 1024 / 1024).toFixed(2) + "MB (base64)" : "لا يوجد"}`);
-  if (!picked || !picked.data) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
+  debugLog(`تم الاختيار: ${picked ? (picked.name || "(بدون اسم)") : "لا شيء"}, حجم البيانات: ${picked && picked.base64 ? (picked.base64.length / 1024 / 1024).toFixed(2) + "MB (base64)" : "لا يوجد"}`);
+  if (!picked || !picked.base64) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
   if (picked.name && !picked.name.toLowerCase().endsWith(".zip")) {
     if (!confirm(`الملف المختار "${picked.name}" لا يبدو ملفًا مضغوطًا (.zip). المتابعة على أي حال؟`)) return;
   }
   showProgress(true);
   setProgress(0, 1, "جارٍ فتح الملف المضغوط...");
   try {
-    const buffer = await base64ToUint8Array(picked.data);
+    const buffer = await base64ToUint8Array(picked.base64);
     debugLog("جارٍ فتح الأرشيف عبر JSZip...");
     const zip = await JSZip.loadAsync(buffer);
     const entries = Object.values(zip.files).filter((f) => !f.dir && f.name.toLowerCase().endsWith(".json"));
@@ -599,17 +599,13 @@ settingsEls.jsonOption.onclick = async () => {
   debugLog("تم الضغط على خيار ملفات JSON.");
   let result;
   try {
-    // No `types` filter here either - same reasoning as the zip picker:
-    // MIME types reported by Android providers for extracted .json files
-    // are unreliable (often "text/plain" or missing), which greys the
-    // files out under a strict filter.
-    result = await FilePicker.pickFiles({ multiple: true, readData: true });
+    result = await FolderImporter.pickFilesMulti();
   } catch (err) {
-    debugLog("فشل FilePicker.pickFiles (json): " + (err && err.message || err));
-    if (!/cancel/i.test(err && err.message || "")) alert("فشل اختيار الملفات: " + (err && err.message || err));
+    debugLog("فشل اختيار الملفات: " + (err && err.message || err));
+    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملفات: " + (err && err.message || err));
     return;
   }
-  const files = (result.files || []).filter((f) => f.data);
+  const files = (result.files || []).filter((f) => f.base64);
   debugLog(`تم اختيار ${files.length} ملف: ${files.map((f) => f.name).join(", ")}`);
   if (!files.length) { alert("تعذّر قراءة الملفات: لم يتم استلام بيانات."); return; }
   showProgress(true);
@@ -618,7 +614,7 @@ settingsEls.jsonOption.onclick = async () => {
     done++;
     setProgress(done, files.length, `جارٍ الفهرسة... (${done}/${files.length})`);
     try {
-      const text = await base64ToUtf8Text(file.data);
+      const text = await base64ToUtf8Text(file.base64);
       const data = JSON.parse(text);
       const book = parseBookJson(file.name, data, null);
       if (book) { await addParsedBook(book); added++; }
@@ -631,21 +627,20 @@ settingsEls.jsonOption.onclick = async () => {
 
 settingsEls.sqliteOption.onclick = async () => {
   debugLog("تم الضغط على خيار SQLite.");
-  let result;
+  let picked;
   try {
-    result = await FilePicker.pickFiles({ readData: true });
+    picked = await FolderImporter.pickFile();
   } catch (err) {
-    debugLog("فشل FilePicker.pickFiles (sqlite): " + (err && err.message || err));
-    if (!/cancel/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
+    debugLog("فشل اختيار الملف: " + (err && err.message || err));
+    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار الملف: " + (err && err.message || err));
     return;
   }
-  const picked = result.files && result.files[0];
   debugLog(`تم الاختيار: ${picked ? (picked.name || "(بدون اسم)") : "لا شيء"}`);
-  if (!picked || !picked.data) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
+  if (!picked || !picked.base64) { alert("تعذّر قراءة الملف: لم يتم استلام بيانات الملف."); return; }
   showProgress(true);
   setProgress(0, 1, "جارٍ فتح قاعدة البيانات...");
   try {
-    const buf = await base64ToUint8Array(picked.data);
+    const buf = await base64ToUint8Array(picked.base64);
     const added = await importFromSqlite(buf, (done, total, label) => setProgress(done, total, label));
     debugLog(`تم استيراد قاعدة البيانات: أُضيف ${added} كتاب.`);
     setProgress(1, 1, `تم! أُضيف ${added} كتاب.`);
