@@ -497,29 +497,27 @@ const { FolderImporter } = Capacitor.Plugins;
 // filtering (native code reads by file extension, not by what a content
 // provider claims the MIME type is), and no per-file/per-visible-folder
 // selection limit (it recurses on the native side).
+//
+// Files stream in one at a time via the "folderImportFile" event (rather
+// than being handed back all at once) and are parsed/imported immediately
+// as each one arrives - this caps memory use to roughly one file at a
+// time instead of holding an entire large library in memory simultaneously,
+// which is what was crashing the app on a real-sized library folder.
 settingsEls.folderOption.onclick = async () => {
   debugLog("تم الضغط على خيار المجلد الكامل.");
   if (!FolderImporter) {
     alert("ميزة اختيار المجلد غير متوفرة في هذا الإصدار من التطبيق.");
     return;
   }
-  let result;
-  try {
-    result = await FolderImporter.pickFolder();
-  } catch (err) {
-    debugLog("فشل FolderImporter.pickFolder: " + (err && err.message || err));
-    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار المجلد: " + (err && err.message || err));
-    return;
-  }
-  const files = result.files || [];
-  debugLog(`تم فتح المجلد "${result.folderName || "?"}". ملفات موجودة: ${result.scannedCount ?? files.length}, تم تجاوز: ${result.skippedCount ?? 0}.`);
-  if (!files.length) { alert("لم يتم العثور على أي ملفات JSON أو SQLite داخل هذا المجلد أو مجلداته الفرعية."); return; }
 
   showProgress(true);
-  let done = 0, added = 0;
-  for (const file of files) {
+  setProgress(0, 0, "جارٍ فتح المجلد...");
+
+  let done = 0, added = 0, skippedCount = 0;
+
+  const fileListener = await FolderImporter.addListener("folderImportFile", async (file) => {
     done++;
-    setProgress(done, files.length, `جارٍ الفهرسة... (${done}/${files.length}) ${file.name}`);
+    setProgress(done, done, `جارٍ الفهرسة... (${done}) ${file.name}`);
     try {
       if (file.type === "json") {
         const data = JSON.parse(file.text);
@@ -529,15 +527,40 @@ settingsEls.folderOption.onclick = async () => {
         if (book) { await addParsedBook(book); added++; }
       } else if (file.type === "sqlite") {
         const buf = await base64ToUint8Array(file.base64);
-        const n = await importFromSqlite(buf, () => {}); // per-file progress skipped; outer loop already shows progress
+        const n = await importFromSqlite(buf, () => {});
         added += n;
       }
     } catch (err) {
       debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
     }
+  });
+
+  const skipListener = await FolderImporter.addListener("folderImportSkipped", (info) => {
+    skippedCount++;
+    const sizeNote = info.sizeMB ? `, ${info.sizeMB.toFixed(1)}MB` : "";
+    debugLog(`تم تجاوز ${info.relPath} (${info.reason}${sizeNote})`);
+  });
+
+  let result;
+  try {
+    result = await FolderImporter.pickFolder();
+  } catch (err) {
+    debugLog("فشل FolderImporter.pickFolder: " + (err && err.message || err));
+    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار المجلد: " + (err && err.message || err));
+    await fileListener.remove();
+    await skipListener.remove();
+    return;
   }
-  debugLog(`اكتملت الفهرسة: أُضيف ${added} كتاب من ${files.length} ملف.`);
-  setProgress(files.length, files.length, `تم! أُضيف ${added} كتاب.`);
+  await fileListener.remove();
+  await skipListener.remove();
+
+  debugLog(`تم فتح المجلد "${result.folderName || "?"}". أُضيف ${added} كتاب من ${done} ملف تمت معالجته. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  if (!done) {
+    alert("لم يتم العثور على أي ملفات JSON أو SQLite صالحة داخل هذا المجلد أو مجلداته الفرعية.");
+    await updateStats();
+    return;
+  }
+  setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
   await updateStats();
 };
 

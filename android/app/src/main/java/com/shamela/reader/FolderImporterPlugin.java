@@ -178,25 +178,34 @@ public class FolderImporterPlugin extends Plugin {
             return;
         }
 
-        JSArray files = new JSArray();
-        int[] scanned = {0};
-        int[] skipped = {0};
-        try {
-            walk(root, "", files, scanned, skipped);
-        } catch (Exception e) {
-            call.reject("خطأ أثناء قراءة المجلد: " + e.getMessage());
-            return;
-        }
-
-        JSObject ret = new JSObject();
-        ret.put("folderName", root.getName());
-        ret.put("scannedCount", scanned[0]);
-        ret.put("skippedCount", skipped[0]);
-        ret.put("files", files);
-        call.resolve(ret);
+        // Do the actual walking/reading OFF the UI thread: a real library folder
+        // can hold hundreds of files, and synchronous ContentResolver I/O for all
+        // of them on the main thread can freeze the UI long enough to look like a
+        // crash (or trigger a real ANR). Each file is sent to JS the moment it's
+        // read via notifyListeners, instead of being accumulated into one giant
+        // array first - that avoids ever holding the whole library in memory at
+        // once, which is what was actually crashing the app (OutOfMemoryError)
+        // on a large library.
+        new Thread(() -> {
+            int[] scanned = {0};
+            int[] skipped = {0};
+            String folderName = root.getName();
+            try {
+                walk(root, "", scanned, skipped);
+                JSObject ret = new JSObject();
+                ret.put("folderName", folderName);
+                ret.put("scannedCount", scanned[0]);
+                ret.put("skippedCount", skipped[0]);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("خطأ أثناء قراءة المجلد: " + e.getMessage());
+            }
+        }).start();
     }
 
-    private void walk(DocumentFile dir, String relPath, JSArray out, int[] scanned, int[] skipped) {
+    private static final long MAX_SINGLE_FILE_BYTES = 60L * 1024 * 1024; // 60MB safety cap per file
+
+    private void walk(DocumentFile dir, String relPath, int[] scanned, int[] skipped) {
         DocumentFile[] children = dir.listFiles();
         if (children == null) return;
 
@@ -206,7 +215,7 @@ public class FolderImporterPlugin extends Plugin {
             String childRel = relPath.isEmpty() ? childName : relPath + "/" + childName;
 
             if (child.isDirectory()) {
-                walk(child, childRel, out, scanned, skipped);
+                walk(child, childRel, scanned, skipped);
                 continue;
             }
 
@@ -215,7 +224,17 @@ public class FolderImporterPlugin extends Plugin {
             boolean isSqlite = lower.endsWith(".db") || lower.endsWith(".sqlite") || lower.endsWith(".sqlite3");
             if (!isJson && !isSqlite) continue;
 
-            scanned[0]++;
+            long size = child.length(); // 0 or -1 if the provider doesn't report it; treat as unknown, don't skip
+            if (size > MAX_SINGLE_FILE_BYTES) {
+                skipped[0]++;
+                JSObject skip = new JSObject();
+                skip.put("relPath", childRel);
+                skip.put("reason", "large");
+                skip.put("sizeMB", size / 1024.0 / 1024.0);
+                notifyListeners("folderImportSkipped", skip);
+                continue;
+            }
+
             try {
                 byte[] bytes = readAll(child.getUri());
                 JSObject fileObj = new JSObject();
@@ -228,9 +247,16 @@ public class FolderImporterPlugin extends Plugin {
                     fileObj.put("type", "sqlite");
                     fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
                 }
-                out.put(fileObj);
+                scanned[0]++;
+                notifyListeners("folderImportFile", fileObj);
+                // Let bytes/fileObj become eligible for GC before the next file
+                // rather than holding a reference to every file for the whole walk.
             } catch (Exception e) {
-                skipped[0]++; // unreadable/corrupt file - skip it, keep going
+                skipped[0]++;
+                JSObject skip = new JSObject();
+                skip.put("relPath", childRel);
+                skip.put("reason", "error: " + e.getMessage());
+                notifyListeners("folderImportSkipped", skip);
             }
         }
     }
