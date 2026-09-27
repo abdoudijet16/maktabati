@@ -38,6 +38,11 @@
             android:name=".LibraryDownloadService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <service
+            android:name=".FolderImportService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->

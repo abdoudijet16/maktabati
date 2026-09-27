@@ -120,7 +120,7 @@ public class LibraryDownloadService extends Service {
 
     private void failAndStop(String message) {
         FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
-        if (plugin != null) plugin.rejectDownloadCall(message);
+        if (plugin != null) plugin.rejectImportCall(message);
         updateNotification("فشل: " + message, 0, false);
         stopForeground(false);
         stopSelf();
@@ -145,7 +145,7 @@ public class LibraryDownloadService extends Service {
             walkPlainFolder(extractDir, "", scanned, skipped);
 
             FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
-            if (plugin != null) plugin.resolveDownloadCall(scanned[0], skipped[0]);
+            if (plugin != null) plugin.resolveImportCall(scanned[0], skipped[0]);
 
             updateNotification("اكتمل الاستيراد: " + scanned[0] + " كتاب", 100, false);
         } catch (Exception e) {
@@ -209,7 +209,7 @@ public class LibraryDownloadService extends Service {
                         progress.put("phase", "downloading");
                         progress.put("bytesDone", bytesDone);
                         progress.put("totalBytes", totalBytes);
-                        plugin.emitDownloadEvent("downloadProgress", progress);
+                        plugin.emitImportEvent("downloadProgress", progress);
                     }
                     if (totalBytes > 0) {
                         int pct = (int) Math.min(100, (bytesDone * 100) / totalBytes);
@@ -260,7 +260,7 @@ public class LibraryDownloadService extends Service {
                             JSObject progress = new JSObject();
                             progress.put("phase", "extracting");
                             progress.put("filesExtracted", filesExtracted);
-                            plugin.emitDownloadEvent("downloadProgress", progress);
+                            plugin.emitImportEvent("downloadProgress", progress);
                         }
                         updateNotification("جارٍ فك الضغط... " + filesExtracted + " ملف", 0, true);
                     }
@@ -299,7 +299,7 @@ public class LibraryDownloadService extends Service {
                     skip.put("relPath", childRel);
                     skip.put("reason", "large");
                     skip.put("sizeMB", size / 1024.0 / 1024.0);
-                    plugin.emitDownloadEvent("downloadImportSkipped", skip);
+                    plugin.emitImportEvent("downloadImportSkipped", skip);
                 }
                 continue;
             }
@@ -317,14 +317,14 @@ public class LibraryDownloadService extends Service {
                     fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
                 }
                 scanned[0]++;
-                if (plugin != null) plugin.emitDownloadEvent("downloadImportFile", fileObj);
+                if (plugin != null) plugin.emitImportEvent("downloadImportFile", fileObj);
             } catch (Exception e) {
                 skipped[0]++;
                 if (plugin != null) {
                     JSObject skip = new JSObject();
                     skip.put("relPath", childRel);
                     skip.put("reason", "error: " + e.getMessage());
-                    plugin.emitDownloadEvent("downloadImportSkipped", skip);
+                    plugin.emitImportEvent("downloadImportSkipped", skip);
                 }
             }
         }

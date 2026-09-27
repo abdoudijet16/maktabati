@@ -6,7 +6,6 @@ import android.net.Uri;
 import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
-import androidx.documentfile.provider.DocumentFile;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -150,8 +149,27 @@ public class FolderImporterPlugin extends Plugin {
         return name != null ? name : "file";
     }
 
+    /**
+     * Same reliability logic as downloadLibrary below: requesting the
+     * notification permission first (Android 13+) so FolderImportService's
+     * progress notification can actually show once the folder is picked.
+     */
     @PluginMethod
     public void pickFolder(PluginCall call) {
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && getPermissionState("notifications") != com.getcapacitor.PermissionState.GRANTED) {
+            requestPermissionForAlias("notifications", call, "pickFolderPermCallback");
+            return;
+        }
+        launchFolderPicker(call);
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void pickFolderPermCallback(PluginCall call) {
+        launchFolderPicker(call); // proceed regardless of grant/deny, same reasoning as downloads
+    }
+
+    private void launchFolderPicker(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         startActivityForResult(call, intent, "handlePickFolderResult");
     }
@@ -180,35 +198,25 @@ public class FolderImporterPlugin extends Plugin {
             // Not fatal if this fails - we still have read access for this session.
         }
 
-        DocumentFile root = DocumentFile.fromTreeUri(getContext(), treeUri);
-        if (root == null || !root.exists()) {
-            call.reject("تعذّر فتح المجلد المختار.");
-            return;
+        // Hand off to FolderImportService - a FOREGROUND service with a
+        // persistent notification, not a plain background thread. A plain
+        // thread (the previous implementation) gets killed by Android's
+        // Doze/App Standby or an OEM battery manager within seconds to
+        // minutes of the app leaving the foreground or the screen locking,
+        // which would silently abort an import mid-way. A foreground
+        // service is exempt from those limits for as long as its
+        // notification is showing, so importing a large folder survives
+        // switching to another app (YouTube, Instagram, etc.) or locking
+        // the screen - exactly like the auto-download option already does.
+        activeInstance = this;
+        pendingImportCall = call;
+        Intent serviceIntent = new Intent(getContext(), FolderImportService.class);
+        serviceIntent.putExtra("treeUri", treeUri);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            getContext().startForegroundService(serviceIntent);
+        } else {
+            getContext().startService(serviceIntent);
         }
-
-        // Do the actual walking/reading OFF the UI thread: a real library folder
-        // can hold hundreds of files, and synchronous ContentResolver I/O for all
-        // of them on the main thread can freeze the UI long enough to look like a
-        // crash (or trigger a real ANR). Each file is sent to JS the moment it's
-        // read via notifyListeners, instead of being accumulated into one giant
-        // array first - that avoids ever holding the whole library in memory at
-        // once, which is what was actually crashing the app (OutOfMemoryError)
-        // on a large library.
-        new Thread(() -> {
-            int[] scanned = {0};
-            int[] skipped = {0};
-            String folderName = root.getName();
-            try {
-                walk(root, "", scanned, skipped);
-                JSObject ret = new JSObject();
-                ret.put("folderName", folderName);
-                ret.put("scannedCount", scanned[0]);
-                ret.put("skippedCount", skipped[0]);
-                call.resolve(ret);
-            } catch (Exception e) {
-                call.reject("خطأ أثناء قراءة المجلد: " + e.getMessage());
-            }
-        }).start();
     }
 
     /**
@@ -256,7 +264,7 @@ public class FolderImporterPlugin extends Plugin {
 
     private void startDownload(PluginCall call, String url) {
         activeInstance = this;
-        pendingDownloadCall = call;
+        pendingImportCall = call;
         Intent serviceIntent = new Intent(getContext(), LibraryDownloadService.class);
         serviceIntent.putExtra("url", url);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -267,91 +275,40 @@ public class FolderImporterPlugin extends Plugin {
     }
 
     private static FolderImporterPlugin activeInstance;
-    private PluginCall pendingDownloadCall;
+    private PluginCall pendingImportCall;
 
-    /** Called by LibraryDownloadService (different class, same process) to emit progress/file events to JS. */
-    public void emitDownloadEvent(String name, JSObject data) {
+    /** Called by LibraryDownloadService/FolderImportService (different classes, same process) to emit progress/file events to JS. */
+    public void emitImportEvent(String name, JSObject data) {
         notifyListeners(name, data);
     }
 
-    /** Called by LibraryDownloadService when the whole download+extract+import finishes successfully. */
-    public void resolveDownloadCall(int scanned, int skipped) {
-        if (pendingDownloadCall != null) {
+    /** Called by LibraryDownloadService/FolderImportService when an import finishes successfully. */
+    public void resolveImportCall(int scanned, int skipped) {
+        resolveImportCall(scanned, skipped, null);
+    }
+
+    public void resolveImportCall(int scanned, int skipped, String folderName) {
+        if (pendingImportCall != null) {
             JSObject ret = new JSObject();
             ret.put("scannedCount", scanned);
             ret.put("skippedCount", skipped);
-            pendingDownloadCall.resolve(ret);
-            pendingDownloadCall = null;
+            if (folderName != null) ret.put("folderName", folderName);
+            pendingImportCall.resolve(ret);
+            pendingImportCall = null;
         }
     }
 
-    /** Called by LibraryDownloadService if anything fails. */
-    public void rejectDownloadCall(String message) {
-        if (pendingDownloadCall != null) {
-            pendingDownloadCall.reject(message);
-            pendingDownloadCall = null;
+    /** Called by LibraryDownloadService/FolderImportService if anything fails. */
+    public void rejectImportCall(String message) {
+        if (pendingImportCall != null) {
+            pendingImportCall.reject(message);
+            pendingImportCall = null;
         }
     }
 
     public static FolderImporterPlugin getActiveInstance() { return activeInstance; }
 
     private static final long MAX_SINGLE_FILE_BYTES = 60L * 1024 * 1024; // 60MB safety cap per file
-
-    private void walk(DocumentFile dir, String relPath, int[] scanned, int[] skipped) {
-        DocumentFile[] children = dir.listFiles();
-        if (children == null) return;
-
-        for (DocumentFile child : children) {
-            String childName = child.getName();
-            if (childName == null) continue;
-            String childRel = relPath.isEmpty() ? childName : relPath + "/" + childName;
-
-            if (child.isDirectory()) {
-                walk(child, childRel, scanned, skipped);
-                continue;
-            }
-
-            String lower = childName.toLowerCase();
-            boolean isJson = lower.endsWith(".json");
-            boolean isSqlite = lower.endsWith(".db") || lower.endsWith(".sqlite") || lower.endsWith(".sqlite3");
-            if (!isJson && !isSqlite) continue;
-
-            long size = child.length(); // 0 or -1 if the provider doesn't report it; treat as unknown, don't skip
-            if (size > MAX_SINGLE_FILE_BYTES) {
-                skipped[0]++;
-                JSObject skip = new JSObject();
-                skip.put("relPath", childRel);
-                skip.put("reason", "large");
-                skip.put("sizeMB", size / 1024.0 / 1024.0);
-                notifyListeners("folderImportSkipped", skip);
-                continue;
-            }
-
-            try {
-                byte[] bytes = readAll(child.getUri());
-                JSObject fileObj = new JSObject();
-                fileObj.put("name", childName);
-                fileObj.put("relPath", childRel);
-                if (isJson) {
-                    fileObj.put("type", "json");
-                    fileObj.put("text", new String(bytes, StandardCharsets.UTF_8));
-                } else {
-                    fileObj.put("type", "sqlite");
-                    fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
-                }
-                scanned[0]++;
-                notifyListeners("folderImportFile", fileObj);
-                // Let bytes/fileObj become eligible for GC before the next file
-                // rather than holding a reference to every file for the whole walk.
-            } catch (Exception e) {
-                skipped[0]++;
-                JSObject skip = new JSObject();
-                skip.put("relPath", childRel);
-                skip.put("reason", "error: " + e.getMessage());
-                notifyListeners("folderImportSkipped", skip);
-            }
-        }
-    }
 
     private byte[] readAll(Uri uri) throws IOException {
         InputStream in = getContext().getContentResolver().openInputStream(uri);

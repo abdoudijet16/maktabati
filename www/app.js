@@ -493,6 +493,10 @@ async function updateStats() {
   settingsEls.stats.textContent = books.length
     ? `المكتبة الحالية: ${books.length} كتاب`
     : "لا توجد مكتبة محمّلة بعد.";
+  // On an empty library there's nothing to delete - only show the two
+  // import options (auto-download / manual folder). The delete button
+  // reappears as soon as a library exists.
+  settingsEls.clearBtn.style.display = books.length ? "" : "none";
 }
 
 els.settingsBtn.onclick = openSettings;
