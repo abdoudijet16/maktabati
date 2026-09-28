@@ -1,8 +1,8 @@
-# مكتبتي الدينية الشاملة — Android app
+# مكتبة إسلامية — Android app
 
 Book content credit: [shamela.ws](https://shamela.ws) (المكتبة الشاملة). This app is an independent, unofficial reader for locally-extracted book data — not affiliated with shamela.ws.
 
-A mobile, offline rebuild of ShamelaReader:
+A mobile, offline rebuild of Maktaba Islamia:
 - **Screen 1 — Library**: grid of books, category chips, search icon in the top bar.
 - **Screen 2 — Reader**: tap a book → swipe **left/right** to turn pages, page counter at the bottom (`12 / 300`).
 - **Top bar**: icon-only (back, search, bookmark, settings/gear) — no text buttons.
@@ -22,7 +22,7 @@ Building a real Android package requires the Android SDK/Gradle plugin, which Go
 
 1. Create a new GitHub repo and push this whole folder to it.
 2. GitHub Actions will run automatically (workflow already included at `.github/workflows/build-apk.yml`), or trigger it manually from the **Actions** tab → *Build Android APK* → *Run workflow*.
-3. When it finishes (~3–5 min), open the run → **Artifacts** → download `shamela-reader-debug-apk`. That's your installable `.apk`.
+3. When it finishes (~3–5 min), open the run → **Artifacts** → download `maktaba-islamia-debug-apk`. That's your installable `.apk`.
 4. Copy it to your phone and install (you'll need to allow "install unknown apps" for whichever app you copy it with).
 
 ## Option B — Build locally with Android Studio
@@ -39,7 +39,7 @@ Building a real Android package requires the Android SDK/Gradle plugin, which Go
 - App name / package id: edit `capacitor.config.json` (`appName`, `appId`) before running `cap sync`.
 
 ## Loading your book library on the phone
-Download the library: https://archive.org/details/machtaba-islamia
+Download the library: https://archive.org/details/maktaba-islamia
 
 1. On a computer, unzip the downloaded archive with WinRAR (or any zip tool) into a plain folder.
 2. Copy that extracted folder onto the phone (e.g. into its Downloads folder).

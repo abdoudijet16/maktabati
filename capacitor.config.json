@@ -1,6 +1,6 @@
 {
-  "appId": "com.shamela.reader",
-  "appName": "مكتبتي الدينية الشاملة",
+  "appId": "com.maktaba.islamia",
+  "appName": "مكتبة إسلامية",
   "webDir": "www",
   "bundledWebRuntime": false,
   "android": {

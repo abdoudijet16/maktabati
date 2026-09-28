@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Shamela Reader - Android app logic
+   Maktaba Islamia - Android app logic
    Fully client-side: no server. Library data lives in IndexedDB on the
    device, loaded once from either a .zip (category folders of .json books,
    same shape indexer.py expects) or plain .json files picked directly.
@@ -91,7 +91,7 @@ function parseBookJson(filename, data, category) {
 /* -------------------------------------------------------------------- */
 /* IndexedDB storage layer                                               */
 /* -------------------------------------------------------------------- */
-const DB_NAME = "shamela_reader";
+const DB_NAME = "maktaba_islamia";
 const DB_VERSION = 1;
 let dbPromise = null;
 
@@ -262,7 +262,9 @@ const els = {
   groupHeaderTitle: document.getElementById("groupHeaderTitle"),
   groupBackBtn: document.getElementById("groupBackBtn"),
   groupList: document.getElementById("groupList"),
+  libraryCount: document.getElementById("libraryCount"),
   titleBar: document.getElementById("titleBar"),
+  titleBarText: document.getElementById("titleBarText"),
   backBtn: document.getElementById("backBtn"),
   searchBtn: document.getElementById("searchBtn"),
   searchBar: document.getElementById("searchBar"),
@@ -292,6 +294,9 @@ els.groupBackBtn.onclick = () => {
 
 async function refreshLibrary() {
   state.books = await getAllBooks();
+  els.libraryCount.textContent = state.books.length
+    ? `إجمالي الكتب في هذا التطبيق: ${state.books.length} كتاب`
+    : "";
   renderLibraryView();
 }
 
@@ -370,7 +375,6 @@ async function renderBookGrid(baseList) {
     card.className = "book-card";
     const progress = await getProgress(b.id);
     card.innerHTML = `
-      <div class="book-cover">📕</div>
       <div class="book-title">${escapeHtml(b.title || "بدون عنوان")}</div>
       <div class="book-author">${escapeHtml(b.author || "")}</div>
       ${progress ? `<div class="book-progress">متابعة القراءة · صفحة ${progress}</div>` : ""}
@@ -393,7 +397,7 @@ async function openBook(book, startPage) {
   els.backBtn.style.display = "flex";
   els.searchBtn.style.display = "none";
   els.bookmarkBtn.style.display = "flex";
-  els.titleBar.textContent = book.title;
+  els.titleBarText.textContent = book.title;
   await renderPage(0);
 }
 
@@ -404,7 +408,7 @@ function closeReader() {
   els.backBtn.style.display = "none";
   els.searchBtn.style.display = "flex";
   els.bookmarkBtn.style.display = "none";
-  els.titleBar.textContent = "📚 مكتبتي الدينية الشاملة";
+  els.titleBarText.textContent = "مكتبة إسلامية";
   renderLibraryView();
 }
 
@@ -596,9 +600,10 @@ settingsEls.folderOption.onclick = async () => {
       if (file.type === "json") {
         const data = JSON.parse(file.text);
         const parts = (file.relPath || file.name).split("/").filter(Boolean);
-        const category = parts.length > 1 ? parts[0] : null;
+        const category = parts.length > 1 ? parts[parts.length - 2] : null; // immediate parent folder, not the top wrapper folder
         const book = parseBookJson(file.name, data, category);
         if (book) { await addParsedBook(book); added++; }
+        else debugLog(`تجاوز (لا صفحات قابلة للقراءة): ${file.relPath || file.name}`);
       } else if (file.type === "sqlite") {
         const buf = await base64ToUint8Array(file.base64);
         const n = await importFromSqlite(buf, () => {});
@@ -606,6 +611,10 @@ settingsEls.folderOption.onclick = async () => {
       }
     } catch (err) {
       debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
+    } finally {
+      // Always tell native we're done with this file (success OR failure) so it
+      // reads the next one - this is the backpressure that keeps memory flat.
+      try { await FolderImporter.ackImportFile(); } catch (e) { /* native times out and continues */ }
     }
   });
 
@@ -628,7 +637,8 @@ settingsEls.folderOption.onclick = async () => {
   await fileListener.remove();
   await skipListener.remove();
 
-  debugLog(`تم فتح المجلد "${result.folderName || "?"}". أُضيف ${added} كتاب من ${done} ملف تمت معالجته. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  debugLog(`تم فتح المجلد "${result.folderName || "?"}". أرسل النظام ${result.scannedCount ?? "?"} ملف، استُلم ${done}، أُضيف ${added} كتاب. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  if (result.scannedCount != null && done < result.scannedCount) debugLog(`تحذير: فُقد ${result.scannedCount - done} ملف أثناء النقل.`);
   if (!done) {
     alert("لم يتم العثور على أي ملفات JSON أو SQLite صالحة داخل هذا المجلد أو مجلداته الفرعية.");
     await updateStats();
@@ -636,6 +646,7 @@ settingsEls.folderOption.onclick = async () => {
   }
   setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
   await updateStats();
+  alert(`اكتمل الاستيراد.\nإجمالي الكتب المضافة: ${added} كتاب.`);
 };
 
 // Downloads the full library zip (3.1GB, from archive.org) and extracts +
@@ -646,7 +657,7 @@ settingsEls.folderOption.onclick = async () => {
 // extracted straight from disk, which only native code can do safely here.
 // Files stream back one at a time via events exactly like the folder
 // picker, so this reuses the same listener plumbing.
-const LIBRARY_ZIP_URL = "https://archive.org/download/machtaba-islamia/machtaba-islamia.zip";
+const LIBRARY_ZIP_URL = "https://archive.org/download/maktaba-islamia/maktaba-islamia.zip";
 
 settingsEls.downloadOption.onclick = async () => {
   debugLog("تم الضغط على خيار التنزيل التلقائي.");
@@ -679,9 +690,10 @@ settingsEls.downloadOption.onclick = async () => {
       if (file.type === "json") {
         const data = JSON.parse(file.text);
         const parts = (file.relPath || file.name).split("/").filter(Boolean);
-        const category = parts.length > 1 ? parts[0] : null;
+        const category = parts.length > 1 ? parts[parts.length - 2] : null; // immediate parent folder, not the top wrapper folder
         const book = parseBookJson(file.name, data, category);
         if (book) { await addParsedBook(book); added++; }
+        else debugLog(`تجاوز (لا صفحات قابلة للقراءة): ${file.relPath || file.name}`);
       } else if (file.type === "sqlite") {
         const buf = await base64ToUint8Array(file.base64);
         const n = await importFromSqlite(buf, () => {});
@@ -689,6 +701,10 @@ settingsEls.downloadOption.onclick = async () => {
       }
     } catch (err) {
       debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
+    } finally {
+      // Always tell native we're done with this file (success OR failure) so it
+      // reads the next one - this is the backpressure that keeps memory flat.
+      try { await FolderImporter.ackImportFile(); } catch (e) { /* native times out and continues */ }
     }
   });
 
@@ -712,9 +728,11 @@ settingsEls.downloadOption.onclick = async () => {
   await fileListener.remove();
   await skipListener.remove();
 
-  debugLog(`اكتمل التنزيل والاستيراد. أُضيف ${added} كتاب من ${done} ملف. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  debugLog(`اكتمل التنزيل والاستيراد. أرسل النظام ${result.scannedCount ?? "?"} ملف، استُلم ${done}، أُضيف ${added} كتاب. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
+  if (result.scannedCount != null && done < result.scannedCount) debugLog(`تحذير: فُقد ${result.scannedCount - done} ملف أثناء النقل.`);
   setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
   await updateStats();
+  alert(`اكتمل التنزيل والاستيراد.\nإجمالي الكتب المضافة: ${added} كتاب.`);
 };
 
 /* ---------------- Boot ---------------- */

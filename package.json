@@ -1,7 +1,7 @@
 {
-  "name": "shamela-reader",
+  "name": "maktaba-islamia",
   "version": "1.0.0",
-  "description": "Shamela Reader - offline Islamic book library reader for Android",
+  "description": "Maktaba Islamia - offline Islamic book library reader for Android",
   "private": true,
   "scripts": {
     "sync": "cap sync android",
