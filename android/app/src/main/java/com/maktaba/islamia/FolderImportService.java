@@ -19,7 +19,6 @@ import com.getcapacitor.JSObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Walks a folder tree the person picked via FolderImporterPlugin.pickFolder
@@ -121,8 +120,10 @@ public class FolderImportService extends android.app.Service {
 
         int[] scanned = {0};
         int[] skipped = {0};
+        BookIndexer.Batch batch = new BookIndexer.Batch();
         try {
-            walk(root, "", scanned, skipped);
+            walk(root, "", scanned, skipped, batch);
+            batch.flush();
         } catch (Exception e) {
             failAndStop("خطأ أثناء قراءة المجلد: " + e.getMessage());
             return;
@@ -136,7 +137,7 @@ public class FolderImportService extends android.app.Service {
         stopSelf();
     }
 
-    private void walk(DocumentFile dir, String relPath, int[] scanned, int[] skipped) {
+    private void walk(DocumentFile dir, String relPath, int[] scanned, int[] skipped, BookIndexer.Batch batch) {
         DocumentFile[] children = dir.listFiles();
         if (children == null) return;
 
@@ -146,7 +147,7 @@ public class FolderImportService extends android.app.Service {
             String childRel = relPath.isEmpty() ? childName : relPath + "/" + childName;
 
             if (child.isDirectory()) {
-                walk(child, childRel, scanned, skipped);
+                walk(child, childRel, scanned, skipped, batch);
                 continue;
             }
 
@@ -156,7 +157,29 @@ public class FolderImportService extends android.app.Service {
             if (!isJson && !isSqlite) continue;
 
             FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
-            long size = child.length(); // 0 or -1 if the provider doesn't report it; treat as unknown, don't skip
+
+            if (isJson) {
+                // Index only: read the head of the file for title/author/category.
+                // The full text is read later, the first time the book is opened.
+                try (InputStream in = getContentResolver().openInputStream(child.getUri())) {
+                    if (in == null) throw new IOException("cannot open stream");
+                    batch.add(BookIndexer.readMeta(in, childName, dir.getName(), "saf", child.getUri().toString()));
+                    scanned[0]++;
+                    if (scanned[0] % 50 == 0) updateNotification("تمت فهرسة " + scanned[0] + " كتاب", scanned[0], 0);
+                } catch (Exception e) {
+                    skipped[0]++;
+                    if (plugin != null) {
+                        JSObject skip = new JSObject();
+                        skip.put("relPath", childRel);
+                        skip.put("reason", "error: " + e.getMessage());
+                        plugin.emitImportEvent("folderImportSkipped", skip);
+                    }
+                }
+                continue;
+            }
+
+            // SQLite database: a single file holding many books - imported in full, as before.
+            long size = child.length();
             if (size > MAX_SINGLE_FILE_BYTES) {
                 skipped[0]++;
                 if (plugin != null) {
@@ -168,26 +191,18 @@ public class FolderImportService extends android.app.Service {
                 }
                 continue;
             }
-
             try {
                 byte[] bytes = readAll(child.getUri());
                 JSObject fileObj = new JSObject();
                 fileObj.put("name", childName);
                 fileObj.put("relPath", childRel);
-                if (isJson) {
-                    fileObj.put("type", "json");
-                    fileObj.put("text", new String(bytes, StandardCharsets.UTF_8));
-                } else {
-                    fileObj.put("type", "sqlite");
-                    fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
-                }
+                fileObj.put("type", "sqlite");
+                fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
                 scanned[0]++;
                 if (plugin != null) {
                     plugin.emitImportEvent("folderImportFile", fileObj);
-                    // Backpressure: wait for JS to finish this file before reading the next.
-                    plugin.waitForImportAck(20000);
+                    plugin.waitForImportAck(20000); // backpressure: wait for JS to finish this file
                 }
-                if (scanned[0] % 10 == 0) updateNotification(childName, scanned[0], 0); // total unknown ahead of time
             } catch (Exception e) {
                 skipped[0]++;
                 if (plugin != null) {

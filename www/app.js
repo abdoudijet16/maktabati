@@ -149,6 +149,73 @@ async function addParsedBook(book) {
   return new Promise((res) => (t.oncomplete = () => res(id)));
 }
 
+/* Fast import: only the index entry of each book (title/author/category/where its
+   file is) is stored up front. The pages are stored the first time the book is opened. */
+async function addIndexBatch(items) {
+  if (!items.length) return;
+  const t = await tx(["books"], "readwrite");
+  const store = t.objectStore("books");
+  items.forEach((it) => store.add({
+    title: it.title,
+    author: it.author || null,
+    category: it.category || "عام",
+    page_count: it.pageCount || 0,
+    source: it.source,   // "zip" (downloaded library) or "saf" (a folder the person picked)
+    ref: it.ref,         // zip entry name / document URI - used to read the file later
+    loaded: false,
+  }));
+  return new Promise((res, rej) => {
+    t.oncomplete = () => res();
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+
+// Writes one streamed batch of a book's pages (called repeatedly while a book
+// loads, instead of holding the whole book in memory - see ensureBookLoaded).
+async function storePageBatch(bookId, startIndex, pages) {
+  const t = await tx(["pages"], "readwrite");
+  const store = t.objectStore("pages");
+  pages.forEach((text, i) => {
+    store.put({ key: `${bookId}_${startIndex + i + 1}`, bookId, page: startIndex + i + 1, text });
+  });
+  return new Promise((res, rej) => {
+    t.oncomplete = () => res();
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+
+// Records how far a book's load has gotten, so an interrupted load (app closed,
+// killed in the background, crash) resumes from here instead of starting the
+// book over from page 1 next time it's opened.
+async function updatePagesLoaded(bookId, n) {
+  const t = await tx(["books"], "readwrite");
+  const store = t.objectStore("books");
+  const req = store.get(bookId);
+  return new Promise((res, rej) => {
+    req.onsuccess = () => {
+      const b = req.result;
+      if (b) { b.pagesLoaded = n; store.put(b); }
+      res();
+    };
+    req.onerror = () => rej(req.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+
+// Marks a book as fully loaded once every page batch has been written.
+async function finalizeBook(book, pageCount) {
+  const updated = { ...book, loaded: true, page_count: pageCount };
+  const t = await tx(["books"], "readwrite");
+  t.objectStore("books").put(updated);
+  return new Promise((res, rej) => {
+    t.oncomplete = () => res(updated);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+
 async function getAllBooks() {
   const t = await tx(["books"], "readonly");
   return new Promise((res, rej) => {
@@ -263,6 +330,7 @@ const els = {
   groupBackBtn: document.getElementById("groupBackBtn"),
   groupList: document.getElementById("groupList"),
   libraryCount: document.getElementById("libraryCount"),
+  prefetchStatus: document.getElementById("prefetchStatus"),
   titleBar: document.getElementById("titleBar"),
   titleBarText: document.getElementById("titleBarText"),
   backBtn: document.getElementById("backBtn"),
@@ -270,6 +338,8 @@ const els = {
   searchBar: document.getElementById("searchBar"),
   searchInput: document.getElementById("searchInput"),
   settingsBtn: document.getElementById("settingsBtn"),
+  creditsBtn: document.getElementById("creditsBtn"),
+  creditsBanner: document.getElementById("creditsBanner"),
   settingsOverlay: document.getElementById("settingsOverlay"),
   pageText: document.getElementById("pageText"),
   pageCounter: document.getElementById("pageCounter"),
@@ -389,19 +459,95 @@ function escapeHtml(s) {
 }
 
 /* ---------------- Reader screen ---------------- */
+// A book's pages are streamed in from native a batch at a time (rather than the
+// whole file being read into memory at once) - see openBookStream/nextBookPages
+// in FolderImporterPlugin.java and BookStream.java. This means there is no size
+// limit on a book: only one small batch of pages is ever held in memory here,
+// and each batch is written to IndexedDB as it arrives.
+//
+// bookLoadToken makes an in-progress load cancellable: if the person leaves the
+// book (or opens a different one) before loading finishes, the stale load
+// notices on its next batch and stops instead of racing the new one.
+let bookLoadToken = 0;
+
+async function ensureBookLoaded(book, myToken, onProgress) {
+  if (book.loaded !== false) return book; // already loaded (or imported from a database)
+
+  // If a previous load of this book was interrupted (app closed, killed in the
+  // background, crash), resume from where it left off: pages up to
+  // pagesLoaded are already saved, so the stream is fast-forwarded past them
+  // (cheap - just parsing, no database writes) and only the new tail is saved.
+  const alreadyLoaded = book.pagesLoaded || 0;
+
+  const { id } = await FolderImporter.openBookStream({ kind: book.source, ref: book.ref });
+  let total = 0;
+  while (true) {
+    if (myToken !== bookLoadToken) {
+      try { await FolderImporter.closeBookStream({ id }); } catch (e) { /* ignore */ }
+      return null; // cancelled - the person left this book
+    }
+    const { pages, done } = await FolderImporter.nextBookPages({ id, max: 50 });
+    if (pages.length) {
+      if (total >= alreadyLoaded) {
+        await storePageBatch(book.id, total, pages);
+        total += pages.length;
+        await updatePagesLoaded(book.id, total);
+      } else if (total + pages.length <= alreadyLoaded) {
+        total += pages.length; // entirely already saved - just advance past it
+      } else {
+        const newPart = pages.slice(alreadyLoaded - total); // batch straddles the resume point
+        await storePageBatch(book.id, alreadyLoaded, newPart);
+        total += pages.length;
+        await updatePagesLoaded(book.id, total);
+      }
+      if (onProgress) onProgress(total);
+    }
+    if (done) break;
+  }
+  if (myToken !== bookLoadToken) return null;
+  if (!total) throw new Error("لا توجد صفحات قابلة للقراءة في هذا الكتاب.");
+  const updated = await finalizeBook(book, total);
+  const i = state.books.findIndex((b) => b.id === updated.id);
+  if (i >= 0) state.books[i] = updated;
+  return updated;
+}
+
 async function openBook(book, startPage) {
-  state.currentBook = book;
-  state.currentPage = Math.min(Math.max(1, startPage || 1), book.page_count);
+  const myToken = ++bookLoadToken; // supersedes any still-loading previous book
+
   els.libraryScreen.style.display = "none";
   els.readerScreen.style.display = "block";
   els.backBtn.style.display = "flex";
   els.searchBtn.style.display = "none";
   els.bookmarkBtn.style.display = "flex";
   els.titleBarText.textContent = book.title;
+
+  if (book.loaded === false) {
+    els.pageText.textContent = "جارٍ تحميل الكتاب...";
+    try {
+      const loaded = await ensureBookLoaded(book, myToken, (n) => {
+        if (myToken === bookLoadToken) els.pageText.textContent = `جارٍ تحميل الكتاب... (${n} صفحة)`;
+      });
+      if (!loaded) return; // the person left before it finished loading
+      book = loaded;
+    } catch (err) {
+      debugLog(`تعذّر فتح "${book.title}": ${err && err.message || err}`);
+      if (myToken === bookLoadToken) {
+        alert("تعذّر فتح الكتاب: " + (err && err.message || err));
+        closeReader();
+      }
+      return;
+    }
+  }
+
+  if (myToken !== bookLoadToken) return; // superseded while the check above ran
+  state.currentBook = book;
+  state.currentPage = Math.min(Math.max(1, startPage || 1), book.page_count);
   await renderPage(0);
 }
 
 function closeReader() {
+  bookLoadToken++; // cancel any book that is still loading
   state.currentBook = null;
   els.readerScreen.style.display = "none";
   els.libraryScreen.style.display = "block";
@@ -475,6 +621,7 @@ els.searchInput.addEventListener("input", (e) => {
 const settingsEls = {
   overlay: els.settingsOverlay,
   downloadOption: document.getElementById("pickDownloadOption"),
+  zipOption: document.getElementById("pickZipOption"),
   folderOption: document.getElementById("pickFolderOption"),
   progress: document.getElementById("sheetProgress"),
   progressFill: document.getElementById("progressFill"),
@@ -504,12 +651,16 @@ async function updateStats() {
 }
 
 els.settingsBtn.onclick = openSettings;
+els.creditsBtn.onclick = () => {
+  const showing = els.creditsBanner.style.display !== "none";
+  els.creditsBanner.style.display = showing ? "none" : "";
+};
 document.getElementById("emptyOpenSettings").onclick = openSettings;
 settingsEls.closeBtn.onclick = closeSettings;
 settingsEls.clearBtn.onclick = async () => {
   const understood = confirm(
     "تحذير: حذف المكتبة\n\n" +
-    "سيؤدي هذا إلى حذف جميع الكتب وتقدّم القراءة المحفوظ نهائيًا من داخل هذا التطبيق، ولا يمكن التراجع عن ذلك بعد الحذف.\n\n" +
+    "سيؤدي هذا إلى حذف جميع الكتب وتقدّم القراءة المحفوظ نهائيًا من داخل هذا التطبيق، وسيُحذف أيضًا ملف المكتبة الذي تم تنزيله، ولا يمكن التراجع عن ذلك بعد الحذف.\n\n" +
     "ملاحظة مهمة: هذا الإجراء لا يقوم بإلغاء تثبيت التطبيق نفسه من الهاتف - فقط يمسح الكتب المستوردة بداخله، ويمكنك بعدها استيراد المكتبة من جديد في أي وقت.\n" +
     "إذا كنت تريد حذف التطبيق بالكامل من الهاتف بدلاً من ذلك، أغلق هذه الرسالة وقم بإلغاء تثبيت التطبيق من إعدادات الهاتف.\n\n" +
     "هل تريد المتابعة وحذف مكتبة الكتب من داخل التطبيق؟"
@@ -521,7 +672,10 @@ settingsEls.clearBtn.onclick = async () => {
   );
   if (!finalConfirm) return;
 
+  prefetchStop = true; // stop preparing books that are about to be deleted
   await clearLibrary();
+  // Also delete the downloaded library file (several GB) so the space is freed.
+  try { if (FolderImporter) await FolderImporter.clearDownloadedFiles(); } catch (e) { /* nothing to delete */ }
   await updateStats();
   refreshLibrary();
 };
@@ -569,94 +723,208 @@ async function base64ToUtf8Text(base64) {
 // and every tested file manager honors that the same way.
 const { FolderImporter } = Capacitor.Plugins;
 
-// Pick one top-level folder and import everything inside it (any depth of
-// subfolders) in a single native call - see FolderImporterPlugin.java.
-// This sidesteps both problems the other pickers have: no MIME-type
-// filtering (native code reads by file extension, not by what a content
-// provider claims the MIME type is), and no per-file/per-visible-folder
-// selection limit (it recurses on the native side).
+// One import routine shared by both buttons. Native code sends the books as small
+// index entries in batches ("libraryIndexBatch"); each batch is saved in one quick
+// database write. SQLite files (a whole database) still arrive as a file event.
+async function runNativeImport({ fileEvent, skipEvent, extraListeners, startCall }) {
+  const existing = new Set((await getAllBooks()).map((b) => b.ref).filter(Boolean));
+  const out = { indexed: 0, duplicates: 0, sqliteAdded: 0, sqliteFiles: 0, skippedCount: 0, result: null };
+  let writeChain = Promise.resolve();
+  const listeners = [];
+
+  listeners.push(await FolderImporter.addListener("libraryIndexBatch", (batch) => {
+    const all = batch.items || [];
+    const items = all.filter((it) => it.ref && !existing.has(it.ref));
+    out.duplicates += all.length - items.length;
+    items.forEach((it) => existing.add(it.ref));
+    writeChain = writeChain
+      .then(() => addIndexBatch(items))
+      .then(() => {
+        out.indexed += items.length;
+        setProgress(out.indexed, out.indexed, `جارٍ فهرسة الكتب... (${out.indexed})`);
+      })
+      .catch((err) => debugLog("فشل حفظ دفعة من الفهرس: " + (err && err.message || err)));
+  }));
+
+  listeners.push(await FolderImporter.addListener(fileEvent, async (file) => {
+    out.sqliteFiles++;
+    try {
+      if (file.type === "sqlite") {
+        const buf = await base64ToUint8Array(file.base64);
+        out.sqliteAdded += await importFromSqlite(buf, () => {});
+      }
+    } catch (err) {
+      debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
+    } finally {
+      // Tell native we're done with this file so it sends the next (keeps memory flat).
+      try { await FolderImporter.ackImportFile(); } catch (e) { /* native times out and continues */ }
+    }
+  }));
+
+  listeners.push(await FolderImporter.addListener(skipEvent, (info) => {
+    out.skippedCount++;
+    const sizeNote = info.sizeMB ? `, ${info.sizeMB.toFixed(1)}MB` : "";
+    debugLog(`تم تجاوز ${info.relPath} (${info.reason}${sizeNote})`);
+  }));
+
+  for (const make of extraListeners || []) listeners.push(await make());
+
+  let failure = null;
+  try { out.result = await startCall(); } catch (e) { failure = e; }
+  for (const l of listeners) { try { await l.remove(); } catch (e) { /* ignore */ } }
+  await writeChain; // make sure every batch has been saved before reporting
+  if (failure) throw failure;
+  return out;
+}
+
+// After import, or on app start if some books were left unloaded from a
+// previous session, quietly reads every book's pages in the background - one
+// book at a time - so most books are already instant to open by the time
+// they're actually tapped, instead of everyone paying the "جارٍ تحميل
+// الكتاب..." step individually the first time. Uses the exact same streaming
+// loader as opening a book manually (ensureBookLoaded), so it's memory-safe
+// for a book of any size and automatically resumes any book that was only
+// partly loaded before.
 //
-// Files stream in one at a time via the "folderImportFile" event (rather
-// than being handed back all at once) and are parsed/imported immediately
-// as each one arrives - this caps memory use to roughly one file at a
-// time instead of holding an entire large library in memory simultaneously,
-// which is what was crashing the app on a real-sized library folder.
+// This yields to a manually opened book automatically: ensureBookLoaded is
+// cancelled the same way (bookLoadToken) when the person taps a book, so
+// prefetch never competes with something the person is actively waiting on -
+// it just picks up the next book once the token frees up again.
+let prefetchRunning = false;
+let prefetchStop = false;
+const prefetchFailedIds = new Set();
+
+async function startBackgroundPrefetch() {
+  if (prefetchRunning) return;
+  prefetchRunning = true;
+  prefetchStop = false;
+  try {
+    while (!prefetchStop) {
+      const todo = state.books.filter((b) =>
+        b.loaded === false && !prefetchFailedIds.has(b.id) && (!state.currentBook || b.id !== state.currentBook.id)
+      );
+      if (!todo.length) break;
+      const book = todo[0];
+      const myToken = bookLoadToken; // don't start a new "generation" - just ride the current one
+      updatePrefetchStatus(todo.length);
+      try {
+        const updated = await ensureBookLoaded(book, myToken, null);
+        if (updated) {
+          const i = state.books.findIndex((b) => b.id === updated.id);
+          if (i >= 0) state.books[i] = updated;
+        }
+        // If it came back null, the person opened something and cancelled this
+        // book's load - just loop around and try the next candidate.
+      } catch (err) {
+        debugLog(`تعذّر تجهيز "${book.title}" في الخلفية: ${err && err.message || err}`);
+        prefetchFailedIds.add(book.id); // don't retry a permanently-broken book this session
+      }
+      await new Promise((r) => setTimeout(r, 20)); // brief yield so the UI stays responsive
+    }
+  } finally {
+    prefetchRunning = false;
+    updatePrefetchStatus(0);
+  }
+}
+
+function updatePrefetchStatus(remaining) {
+  if (!els.prefetchStatus) return;
+  if (remaining > 0) {
+    els.prefetchStatus.style.display = "";
+    els.prefetchStatus.textContent = `جارٍ تجهيز الكتب للقراءة الفورية في الخلفية... (${remaining} متبقٍ)`;
+  } else {
+    els.prefetchStatus.style.display = "none";
+  }
+}
+
+async function finishImport(out) {
+  const total = out.indexed + out.sqliteAdded;
+  const r = out.result || {};
+  debugLog(`أرسل النظام ${r.scannedCount ?? "?"} ملف. فُهرس ${out.indexed} كتاب، ${out.sqliteAdded} من قواعد SQLite، ${out.duplicates} موجود مسبقًا، تم تجاوز ${r.skippedCount ?? out.skippedCount}.`);
+  if (r.scannedCount != null && out.indexed + out.duplicates + out.sqliteFiles < r.scannedCount) {
+    debugLog(`تحذير: فُقد ${r.scannedCount - (out.indexed + out.duplicates + out.sqliteFiles)} ملف أثناء النقل.`);
+  }
+  setProgress(total, total, `تم! أُضيف ${total} كتاب.`);
+  await updateStats();
+  if (!total && !out.duplicates) {
+    alert("لم يتم العثور على أي كتب (ملفات JSON أو SQLite) في هذا المصدر.");
+  } else if (!total) {
+    alert(`كل الكتب (${out.duplicates}) موجودة مسبقًا في المكتبة.`);
+  } else {
+    alert(`اكتملت الفهرسة.\nإجمالي الكتب المضافة: ${total} كتاب.\nيتم تحميل نص كل كتاب عند فتحه لأول مرة.`);
+  }
+  startBackgroundPrefetch(); // quietly get books ready to open instantly, in the background
+}
+
+// Pick one top-level folder; every .json/.db file inside it (at any depth of
+// subfolders) is indexed. The folder must stay on the phone: each book is read
+// from it the first time it is opened.
+// Imports a zip the person already downloaded themselves (browser, another app,
+// etc.) directly - no extraction needed. The zip is copied once into the app's
+// private storage (needed for random-access reads later) and indexed exactly
+// like the auto-downloaded library. See ManualZipImportService.java.
+settingsEls.zipOption.onclick = async () => {
+  debugLog("تم الضغط على خيار استيراد ملف مضغوط.");
+  if (!FolderImporter) {
+    alert("هذه الميزة غير متوفرة في هذا الإصدار من التطبيق.");
+    return;
+  }
+  showProgress(true);
+  setProgress(0, 100, "في انتظار اختيار الملف...");
+
+  let out;
+  try {
+    out = await runNativeImport({
+      fileEvent: "zipImportFile",
+      skipEvent: "zipImportSkipped",
+      extraListeners: [
+        () => FolderImporter.addListener("zipImportProgress", (info) => {
+          if (info.phase === "copying") {
+            const pct = info.totalBytes > 0 ? Math.round((info.bytesDone / info.totalBytes) * 100) : 0;
+            setProgress(pct, 100, `جارٍ نسخ الملف... ${pct}% (${(info.bytesDone / 1024 / 1024).toFixed(0)}MB)`);
+          }
+        }),
+      ],
+      startCall: () => FolderImporter.pickAndImportZip(),
+    });
+  } catch (err) {
+    debugLog("فشل استيراد الملف المضغوط: " + (err && err.message || err));
+    showProgress(false);
+    if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل استيراد الملف: " + (err && err.message || err));
+    return;
+  }
+  await finishImport(out);
+};
+
 settingsEls.folderOption.onclick = async () => {
   debugLog("تم الضغط على خيار المجلد الكامل.");
   if (!FolderImporter) {
     alert("ميزة اختيار المجلد غير متوفرة في هذا الإصدار من التطبيق.");
     return;
   }
-
   showProgress(true);
   setProgress(0, 0, "جارٍ فتح المجلد...");
 
-  let done = 0, added = 0, skippedCount = 0;
-
-  const fileListener = await FolderImporter.addListener("folderImportFile", async (file) => {
-    done++;
-    setProgress(done, done, `جارٍ الفهرسة... (${done}) ${file.name}`);
-    try {
-      if (file.type === "json") {
-        const data = JSON.parse(file.text);
-        const parts = (file.relPath || file.name).split("/").filter(Boolean);
-        const category = parts.length > 1 ? parts[parts.length - 2] : null; // immediate parent folder, not the top wrapper folder
-        const book = parseBookJson(file.name, data, category);
-        if (book) { await addParsedBook(book); added++; }
-        else debugLog(`تجاوز (لا صفحات قابلة للقراءة): ${file.relPath || file.name}`);
-      } else if (file.type === "sqlite") {
-        const buf = await base64ToUint8Array(file.base64);
-        const n = await importFromSqlite(buf, () => {});
-        added += n;
-      }
-    } catch (err) {
-      debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
-    } finally {
-      // Always tell native we're done with this file (success OR failure) so it
-      // reads the next one - this is the backpressure that keeps memory flat.
-      try { await FolderImporter.ackImportFile(); } catch (e) { /* native times out and continues */ }
-    }
-  });
-
-  const skipListener = await FolderImporter.addListener("folderImportSkipped", (info) => {
-    skippedCount++;
-    const sizeNote = info.sizeMB ? `, ${info.sizeMB.toFixed(1)}MB` : "";
-    debugLog(`تم تجاوز ${info.relPath} (${info.reason}${sizeNote})`);
-  });
-
-  let result;
+  let out;
   try {
-    result = await FolderImporter.pickFolder();
+    out = await runNativeImport({
+      fileEvent: "folderImportFile",
+      skipEvent: "folderImportSkipped",
+      startCall: () => FolderImporter.pickFolder(),
+    });
   } catch (err) {
-    debugLog("فشل FolderImporter.pickFolder: " + (err && err.message || err));
+    debugLog("فشل اختيار المجلد: " + (err && err.message || err));
+    showProgress(false);
     if (!/cancel|إلغاء/i.test(err && err.message || "")) alert("فشل اختيار المجلد: " + (err && err.message || err));
-    await fileListener.remove();
-    await skipListener.remove();
     return;
   }
-  await fileListener.remove();
-  await skipListener.remove();
-
-  debugLog(`تم فتح المجلد "${result.folderName || "?"}". أرسل النظام ${result.scannedCount ?? "?"} ملف، استُلم ${done}، أُضيف ${added} كتاب. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
-  if (result.scannedCount != null && done < result.scannedCount) debugLog(`تحذير: فُقد ${result.scannedCount - done} ملف أثناء النقل.`);
-  if (!done) {
-    alert("لم يتم العثور على أي ملفات JSON أو SQLite صالحة داخل هذا المجلد أو مجلداته الفرعية.");
-    await updateStats();
-    return;
-  }
-  setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
-  await updateStats();
-  alert(`اكتمل الاستيراد.\nإجمالي الكتب المضافة: ${added} كتاب.`);
+  await finishImport(out);
 };
 
-// Downloads the full library zip (3.1GB, from archive.org) and extracts +
-// imports it, entirely natively (see FolderImporterPlugin.downloadLibrary).
-// This can NOT be done in JS: a 3.1GB file can't be fetched into a JS
-// ArrayBuffer, base64-encoded across the Capacitor bridge, or held in
-// memory by JSZip on a phone - it has to be streamed straight to disk and
-// extracted straight from disk, which only native code can do safely here.
-// Files stream back one at a time via events exactly like the folder
-// picker, so this reuses the same listener plumbing.
+// Downloads the full library zip (about 3.1GB, from archive.org), keeps it as-is in
+// the app's private storage and indexes it - all natively (see
+// FolderImporterPlugin/LibraryDownloadService). This can't be done in JS: a file this
+// size can't be held in memory or passed across the Capacitor bridge on a phone.
 const LIBRARY_ZIP_URL = "https://archive.org/download/maktaba-islamia/maktaba-islamia.zip";
 
 settingsEls.downloadOption.onclick = async () => {
@@ -665,78 +933,40 @@ settingsEls.downloadOption.onclick = async () => {
     alert("ميزة التنزيل التلقائي غير متوفرة في هذا الإصدار من التطبيق.");
     return;
   }
-  if (!confirm("سيتم تنزيل المكتبة كاملة (حوالي 3.1 جيجابايت). يُفضّل استخدام واي فاي وتوفر مساحة تخزين كافية على الهاتف (٦-٧ جيجابايت تقريبًا أثناء التنزيل وفك الضغط). المتابعة؟")) {
+  if (!confirm("سيتم تنزيل المكتبة كاملة (حوالي 3.1 جيجابايت) وحفظها داخل التطبيق. يُفضّل استخدام واي فاي وتوفر مساحة كافية على الهاتف. بعد التنزيل تظهر أسماء الكتب فورًا، ويُفتح كل كتاب عند الضغط عليه. المتابعة؟")) {
     return;
   }
 
   showProgress(true);
   setProgress(0, 100, "جارٍ التنزيل... 0%");
 
-  let done = 0, added = 0, skippedCount = 0;
-
-  const progressListener = await FolderImporter.addListener("downloadProgress", (info) => {
-    if (info.phase === "downloading") {
-      const pct = info.totalBytes > 0 ? Math.round((info.bytesDone / info.totalBytes) * 100) : 0;
-      setProgress(pct, 100, `جارٍ التنزيل... ${pct}% (${(info.bytesDone / 1024 / 1024).toFixed(0)}MB)`);
-    } else if (info.phase === "extracting") {
-      setProgress(100, 100, `جارٍ فك الضغط... ${info.filesExtracted ?? ""}`);
-    }
-  });
-
-  const fileListener = await FolderImporter.addListener("downloadImportFile", async (file) => {
-    done++;
-    setProgress(done, done, `جارٍ الفهرسة... (${done}) ${file.name}`);
-    try {
-      if (file.type === "json") {
-        const data = JSON.parse(file.text);
-        const parts = (file.relPath || file.name).split("/").filter(Boolean);
-        const category = parts.length > 1 ? parts[parts.length - 2] : null; // immediate parent folder, not the top wrapper folder
-        const book = parseBookJson(file.name, data, category);
-        if (book) { await addParsedBook(book); added++; }
-        else debugLog(`تجاوز (لا صفحات قابلة للقراءة): ${file.relPath || file.name}`);
-      } else if (file.type === "sqlite") {
-        const buf = await base64ToUint8Array(file.base64);
-        const n = await importFromSqlite(buf, () => {});
-        added += n;
-      }
-    } catch (err) {
-      debugLog(`تجاوز ملف تالف (${file.relPath || file.name}): ${err.message}`);
-    } finally {
-      // Always tell native we're done with this file (success OR failure) so it
-      // reads the next one - this is the backpressure that keeps memory flat.
-      try { await FolderImporter.ackImportFile(); } catch (e) { /* native times out and continues */ }
-    }
-  });
-
-  const skipListener = await FolderImporter.addListener("downloadImportSkipped", (info) => {
-    skippedCount++;
-    const sizeNote = info.sizeMB ? `, ${info.sizeMB.toFixed(1)}MB` : "";
-    debugLog(`تم تجاوز ${info.relPath} (${info.reason}${sizeNote})`);
-  });
-
-  let result;
+  let out;
   try {
-    result = await FolderImporter.downloadLibrary({ url: LIBRARY_ZIP_URL });
+    out = await runNativeImport({
+      fileEvent: "downloadImportFile",
+      skipEvent: "downloadImportSkipped",
+      extraListeners: [
+        () => FolderImporter.addListener("downloadProgress", (info) => {
+          if (info.phase === "downloading") {
+            const pct = info.totalBytes > 0 ? Math.round((info.bytesDone / info.totalBytes) * 100) : 0;
+            setProgress(pct, 100, `جارٍ التنزيل... ${pct}% (${(info.bytesDone / 1024 / 1024).toFixed(0)}MB)`);
+          }
+        }),
+      ],
+      startCall: () => FolderImporter.downloadLibrary({ url: LIBRARY_ZIP_URL }),
+    });
   } catch (err) {
     debugLog("فشل التنزيل: " + (err && err.message || err));
     alert("فشل تنزيل المكتبة: " + (err && err.message || err));
-    await progressListener.remove(); await fileListener.remove(); await skipListener.remove();
     await updateStats();
     return;
   }
-  await progressListener.remove();
-  await fileListener.remove();
-  await skipListener.remove();
-
-  debugLog(`اكتمل التنزيل والاستيراد. أرسل النظام ${result.scannedCount ?? "?"} ملف، استُلم ${done}، أُضيف ${added} كتاب. تم تجاوز: ${result.skippedCount ?? skippedCount}.`);
-  if (result.scannedCount != null && done < result.scannedCount) debugLog(`تحذير: فُقد ${result.scannedCount - done} ملف أثناء النقل.`);
-  setProgress(done, done, `تم! أُضيف ${added} كتاب.`);
-  await updateStats();
-  alert(`اكتمل التنزيل والاستيراد.\nإجمالي الكتب المضافة: ${added} كتاب.`);
+  await finishImport(out);
 };
 
 /* ---------------- Boot ---------------- */
 (async function boot() {
   await refreshLibrary();
   if (!state.books.length) openSettings();
+  startBackgroundPrefetch(); // pick up any books left unloaded from a previous session
 })();

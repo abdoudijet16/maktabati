@@ -8,54 +8,43 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
-import android.util.Base64;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
 import com.getcapacitor.JSObject;
 
-import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
- * Downloads the (large - the real library is 3.1GB) library zip, extracts it, and
- * imports every .json/.db/.sqlite file inside, entirely off the JS bridge.
+ * Downloads the (large - about 3.1GB) library zip and indexes it, as a FOREGROUND
+ * service so it keeps running when the person switches apps or locks the screen.
  *
- * This runs as a FOREGROUND service (with a visible, ongoing notification), not a
- * plain background thread. A plain thread gets killed by Android's Doze/App Standby
- * or an OEM battery manager (Xiaomi/Huawei/Samsung are especially aggressive about
- * this) within seconds to minutes of the app leaving the foreground or the screen
- * locking - which would silently abort a download that can take several minutes to
- * hours. A foreground service is specifically exempt from those background
- * execution limits for as long as its notification is showing, so the download
- * keeps running if the person switches to another app or locks the screen.
+ * The zip is KEPT as-is in the app's private storage (Context.getFilesDir()) and
+ * is NOT extracted. Indexing walks the zip's entry list and reads only the first
+ * few KB of each book to get its title/author/category, so the whole library is
+ * listed quickly. The full text of a book is read straight out of the zip (random
+ * access via ZipFile) the first time it is opened. This avoids writing many GB of
+ * extracted files to the phone and avoids parsing/storing every book up front.
  *
- * Every read/write here streams through a small fixed buffer - nothing is ever
- * held fully in memory - and everything is written to Context.getFilesDir(), the
- * app's private internal storage: invisible to file managers, not part of the
- * regular Downloads/Documents folders, and not reachable by any other app.
+ * Nothing is buffered beyond a small chunk: the download streams to disk and each
+ * entry is read one at a time.
  *
- * Note (Android 14 / API 34+): a "dataSync" foreground service type is capped by
- * the system at ~6 hours of cumulative runtime per rolling 24h window. That's far
- * more than this download should ever need on a normal connection, but is worth
- * knowing if this is ever reused for something slower.
+ * Note (Android 14 / API 34+): a "dataSync" foreground service is capped by the
+ * system at about 6 hours of cumulative runtime per rolling 24h window.
  */
 public class LibraryDownloadService extends Service {
 
     private static final String CHANNEL_ID = "library_download";
     private static final int NOTIF_ID = 9081;
-    private static final long MAX_SINGLE_FILE_BYTES = 60L * 1024 * 1024; // 60MB safety cap per file
+
+    static final String ZIP_DIR = "library_download";
+    static final String ZIP_NAME = "library.zip";
 
     private NotificationManager notificationManager;
     private NotificationCompat.Builder builder;
@@ -92,9 +81,6 @@ public class LibraryDownloadService extends Service {
         }
 
         new Thread(() -> runDownload(url)).start();
-        // Don't ask the system to auto-restart us if killed - a half-downloaded
-        // file with no in-progress PluginCall to resolve isn't useful; the
-        // person can just tap the download button again.
         return START_NOT_STICKY;
     }
 
@@ -107,7 +93,7 @@ public class LibraryDownloadService extends Service {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID, "تنزيل المكتبة", NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("تقدّم تنزيل مكتبة الكتب واستيرادها");
+            channel.setDescription("تقدّم تنزيل مكتبة الكتب وفهرستها");
             notificationManager.createNotificationChannel(channel);
         }
     }
@@ -127,29 +113,32 @@ public class LibraryDownloadService extends Service {
     }
 
     private void runDownload(String url) {
-        File privateRoot = new File(getFilesDir(), "library_download");
-        File zipFile = new File(privateRoot, "library.zip");
-        File extractDir = new File(privateRoot, "extracted");
+        File privateRoot = new File(getFilesDir(), ZIP_DIR);
+        File zipFile = new File(privateRoot, ZIP_NAME);
+        File partFile = new File(privateRoot, ZIP_NAME + ".part");
         try {
             privateRoot.mkdirs();
-            deleteRecursive(extractDir); // clear any previous partial extraction first
-            extractDir.mkdirs();
+            // Older versions extracted the zip into this folder - reclaim that space.
+            BookIndexer.deleteRecursive(new File(privateRoot, "extracted"));
 
-            downloadToFile(url, zipFile);
-            unzipStreamed(zipFile, extractDir);
-            zipFile.delete(); // reclaim space - extracted files are what we need from here
+            // Download to a .part file first so a half-finished download is never
+            // mistaken for a complete library zip.
+            downloadToFile(url, partFile);
+            zipFile.delete();
+            if (!partFile.renameTo(zipFile)) throw new IOException("تعذّر حفظ الملف بعد التنزيل.");
 
-            updateNotification("جارٍ الاستيراد...", 0, true);
+            updateNotification("جارٍ فهرسة الكتب...", 0, true);
             int[] scanned = {0};
             int[] skipped = {0};
-            walkPlainFolder(extractDir, "", scanned, skipped);
+            indexZip(zipFile, scanned, skipped);
 
             FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
             if (plugin != null) plugin.resolveImportCall(scanned[0], skipped[0]);
 
-            updateNotification("اكتمل الاستيراد: " + scanned[0] + " كتاب", 100, false);
+            updateNotification("اكتملت الفهرسة: " + scanned[0] + " كتاب", 100, false);
         } catch (Exception e) {
-            failAndStop("فشل التنزيل أو الاستيراد: " + e.getMessage());
+            partFile.delete();
+            failAndStop("فشل التنزيل أو الفهرسة: " + e.getMessage());
             return;
         }
         stopForeground(false);
@@ -162,9 +151,9 @@ public class LibraryDownloadService extends Service {
         FileOutputStream out = null;
         try {
             URL url = new URL(urlStr);
-            // Follow redirects manually: archive.org often redirects to a
-            // specific ia<NNN>.us.archive.org mirror host, and
-            // HttpURLConnection does not follow cross-host redirects on its own.
+            // Follow redirects manually: archive.org often redirects to a specific
+            // ia<NNN>.us.archive.org host, and HttpURLConnection does not follow
+            // cross-host redirects on its own.
             for (int i = 0; i < 5; i++) {
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
@@ -226,130 +215,11 @@ public class LibraryDownloadService extends Service {
         }
     }
 
-    private void unzipStreamed(File zipFile, File destDir) throws IOException {
-        ZipInputStream zin = new ZipInputStream(new BufferedInputStream(new FileInputStream(zipFile)));
-        try {
-            ZipEntry entry;
-            int filesExtracted = 0;
-            String destCanonical = destDir.getCanonicalPath();
-            while ((entry = zin.getNextEntry()) != null) {
-                File outFile = new File(destDir, entry.getName());
-                // Zip-slip guard: refuse any entry that would extract outside destDir.
-                if (!outFile.getCanonicalPath().startsWith(destCanonical + File.separator)
-                        && !outFile.getCanonicalPath().equals(destCanonical)) {
-                    zin.closeEntry();
-                    continue;
-                }
-                if (entry.isDirectory()) {
-                    outFile.mkdirs();
-                } else {
-                    File parent = outFile.getParentFile();
-                    if (parent != null) parent.mkdirs();
-                    FileOutputStream fos = new FileOutputStream(outFile);
-                    try {
-                        byte[] buf = new byte[65536];
-                        int n;
-                        while ((n = zin.read(buf)) != -1) fos.write(buf, 0, n);
-                    } finally {
-                        fos.close();
-                    }
-                    filesExtracted++;
-                    if (filesExtracted % 25 == 0) { // throttle: every 25 files
-                        FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
-                        if (plugin != null) {
-                            JSObject progress = new JSObject();
-                            progress.put("phase", "extracting");
-                            progress.put("filesExtracted", filesExtracted);
-                            plugin.emitImportEvent("downloadProgress", progress);
-                        }
-                        updateNotification("جارٍ فك الضغط... " + filesExtracted + " ملف", 0, true);
-                    }
-                }
-                zin.closeEntry();
-            }
-        } finally {
-            zin.close();
-        }
-    }
-
-    private void walkPlainFolder(File dir, String relPath, int[] scanned, int[] skipped) {
-        File[] children = dir.listFiles();
-        if (children == null) return;
-
-        for (File child : children) {
-            String childName = child.getName();
-            String childRel = relPath.isEmpty() ? childName : relPath + "/" + childName;
-
-            if (child.isDirectory()) {
-                walkPlainFolder(child, childRel, scanned, skipped);
-                continue;
-            }
-
-            String lower = childName.toLowerCase();
-            boolean isJson = lower.endsWith(".json");
-            boolean isSqlite = lower.endsWith(".db") || lower.endsWith(".sqlite") || lower.endsWith(".sqlite3");
-            if (!isJson && !isSqlite) continue;
-
-            FolderImporterPlugin plugin = FolderImporterPlugin.getActiveInstance();
-            long size = child.length();
-            if (size > MAX_SINGLE_FILE_BYTES) {
-                skipped[0]++;
-                if (plugin != null) {
-                    JSObject skip = new JSObject();
-                    skip.put("relPath", childRel);
-                    skip.put("reason", "large");
-                    skip.put("sizeMB", size / 1024.0 / 1024.0);
-                    plugin.emitImportEvent("downloadImportSkipped", skip);
-                }
-                continue;
-            }
-
-            try {
-                byte[] bytes = readFileBytes(child);
-                JSObject fileObj = new JSObject();
-                fileObj.put("name", childName);
-                fileObj.put("relPath", childRel);
-                if (isJson) {
-                    fileObj.put("type", "json");
-                    fileObj.put("text", new String(bytes, StandardCharsets.UTF_8));
-                } else {
-                    fileObj.put("type", "sqlite");
-                    fileObj.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
-                }
-                scanned[0]++;
-                if (plugin != null) {
-                    plugin.emitImportEvent("downloadImportFile", fileObj);
-                    // Backpressure: wait for JS to finish this file before reading the next.
-                    plugin.waitForImportAck(20000);
-                }
-            } catch (Exception e) {
-                skipped[0]++;
-                if (plugin != null) {
-                    JSObject skip = new JSObject();
-                    skip.put("relPath", childRel);
-                    skip.put("reason", "error: " + e.getMessage());
-                    plugin.emitImportEvent("downloadImportSkipped", skip);
-                }
-            }
-        }
-    }
-
-    private byte[] readFileBytes(File file) throws IOException {
-        try (FileInputStream in = new FileInputStream(file);
-             ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
-            byte[] chunk = new byte[8192];
-            int n;
-            while ((n = in.read(chunk)) != -1) buffer.write(chunk, 0, n);
-            return buffer.toByteArray();
-        }
-    }
-
-    private void deleteRecursive(File file) {
-        if (file == null || !file.exists()) return;
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children != null) for (File child : children) deleteRecursive(child);
-        }
-        file.delete();
+    /**
+     * Walks the zip's entry list (a cheap lookup in its central directory) and
+     * reads only the head of each book JSON to build its index entry.
+     */
+    private void indexZip(File zipFile, int[] scanned, int[] skipped) throws IOException {
+        BookIndexer.indexZipFile(zipFile, scanned, skipped, "downloadImportFile", "downloadImportSkipped");
     }
 }

@@ -43,6 +43,11 @@
             android:name=".FolderImportService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <service
+            android:name=".ManualZipImportService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->

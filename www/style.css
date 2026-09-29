@@ -51,6 +51,9 @@ body{
 .chip.active{background:var(--accent); color:var(--accent-ink);}
 
 .library-count{padding:8px 12px 0; font-size:12px; color:var(--ink-soft); text-align:center;}
+.credits-banner{padding:8px 12px; font-size:12px; color:var(--ink-soft); text-align:center; line-height:1.7; background:var(--chip); margin:8px 12px 0; border-radius:8px;}
+.credits-banner a{color:var(--accent);}
+.prefetch-status{padding:2px 12px 0; font-size:11px; color:var(--ink-soft); text-align:center; opacity:0.8;}
 .view-tabs{display:flex; gap:6px; padding:10px 12px 4px;}.view-tab{
   flex:1; padding:8px 4px; border:none; border-radius:10px; background:var(--chip);
   font-size:13px; font-weight:600; color:var(--ink-soft); cursor:pointer;

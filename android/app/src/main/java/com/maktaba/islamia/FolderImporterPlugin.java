@@ -47,6 +47,44 @@ import java.nio.charset.StandardCharsets;
 public class FolderImporterPlugin extends Plugin {
 
     /**
+     * Lets the person pick a .zip file they downloaded manually (e.g. straight from
+     * a browser, with no extraction needed) and imports it in place: the zip is
+     * copied once into the app's private storage, then indexed exactly like the
+     * auto-downloaded library. Runs as a foreground service (ManualZipImportService)
+     * so a large zip survives the app being backgrounded, same as the other
+     * long-running imports.
+     */
+    @PluginMethod
+    public void pickAndImportZip(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        startActivityForResult(call, intent, "handlePickZipResult");
+    }
+
+    @ActivityCallback
+    private void handlePickZipResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null) {
+            call.reject("تم إلغاء اختيار الملف.");
+            return;
+        }
+        Uri uri = result.getData().getData();
+        if (uri == null) { call.reject("تعذّر الحصول على مسار الملف."); return; }
+
+        activeInstance = this;
+        pendingImportCall = call;
+        importAck.drainPermits(); // clear any stale acks from a previous run
+        Intent serviceIntent = new Intent(getContext(), ManualZipImportService.class);
+        serviceIntent.putExtra("uri", uri);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            getContext().startForegroundService(serviceIntent);
+        } else {
+            getContext().startService(serviceIntent);
+        }
+    }
+
+    /**
      * Picks ONE file of any type via ACTION_OPEN_DOCUMENT (not ACTION_GET_CONTENT).
      * OPEN_DOCUMENT explicitly means "hand back this exact document" and is handled
      * far more consistently across file managers than GET_CONTENT, which many apps
@@ -309,6 +347,93 @@ public class FolderImporterPlugin extends Plugin {
     }
 
     public static FolderImporterPlugin getActiveInstance() { return activeInstance; }
+
+    // ---- Reading one book on demand, as a stream of page batches ----
+    // The book is never read into memory as a whole: JS opens a stream, then asks
+    // for batches of pages one call at a time (natural backpressure), so a book of
+    // any size uses only a small, constant amount of memory. See BookStream.
+    private final java.util.Map<String, BookStream> bookStreams = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger bookStreamCounter = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * Opens a book for reading.
+     * kind "zip": `ref` is the entry name inside the downloaded library zip (random access, no extraction).
+     * kind "saf": `ref` is the document URI of a file in a folder the person picked.
+     */
+    @PluginMethod
+    public void openBookStream(PluginCall call) {
+        final String kind = call.getString("kind");
+        final String ref = call.getString("ref");
+        if (kind == null || ref == null) { call.reject("بيانات الكتاب ناقصة."); return; }
+
+        new Thread(() -> {
+            try {
+                closeAllBookStreams(); // only one book is loaded at a time
+                BookStream stream = BookStream.open(getContext(), kind, ref);
+                String id = String.valueOf(bookStreamCounter.incrementAndGet());
+                bookStreams.put(id, stream);
+                JSObject ret = new JSObject();
+                ret.put("id", id);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("تعذّر فتح الكتاب: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** Returns the next batch of pages: { pages: [text, ...], done: boolean }. */
+    @PluginMethod
+    public void nextBookPages(PluginCall call) {
+        final String id = call.getString("id");
+        final int max = call.getInt("max", 50);
+        final BookStream stream = id == null ? null : bookStreams.get(id);
+        if (stream == null) { call.reject("انتهت جلسة قراءة الكتاب."); return; }
+
+        new Thread(() -> {
+            try {
+                java.util.List<String> pages = stream.next(max);
+                JSArray arr = new JSArray();
+                for (String p : pages) arr.put(p);
+                boolean done = stream.isDone();
+                JSObject ret = new JSObject();
+                ret.put("pages", arr);
+                ret.put("done", done);
+                if (done) {
+                    stream.close();
+                    bookStreams.remove(id);
+                }
+                call.resolve(ret);
+            } catch (Exception e) {
+                stream.close();
+                bookStreams.remove(id);
+                call.reject("تعذّر قراءة الكتاب: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** Closes a book stream early (e.g. the person left the book while it was loading). */
+    @PluginMethod
+    public void closeBookStream(PluginCall call) {
+        String id = call.getString("id");
+        BookStream stream = id == null ? null : bookStreams.remove(id);
+        if (stream != null) stream.close();
+        call.resolve();
+    }
+
+    private void closeAllBookStreams() {
+        for (BookStream s : bookStreams.values()) s.close();
+        bookStreams.clear();
+    }
+
+    /** Deletes the downloaded library zip (used when the library is cleared, to free the space). */
+    @PluginMethod
+    public void clearDownloadedFiles(PluginCall call) {
+        new Thread(() -> {
+            BookIndexer.deleteRecursive(new java.io.File(getContext().getFilesDir(), LibraryDownloadService.ZIP_DIR));
+            BookIndexer.deleteRecursive(new java.io.File(getContext().getFilesDir(), ManualZipImportService.ZIP_DIR));
+            call.resolve();
+        }).start();
+    }
 
     // ---- Backpressure between native file emission and JS processing ----
     // The old design had native read and emit every matching file as fast as

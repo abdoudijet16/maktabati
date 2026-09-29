@@ -22,10 +22,18 @@
     <button class="icon-btn" id="bookmarkBtn" style="display:none" title="إشارة مرجعية">
       <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4V3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
     </button>
+    <button class="icon-btn" id="creditsBtn" title="حقوق المحتوى">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="11" x2="12" y2="16.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor"/></svg>
+    </button>
     <button class="icon-btn" id="settingsBtn" title="الإعدادات">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
   </div>
+</div>
+
+<div class="credits-banner" id="creditsBanner" style="display:none">
+  محتوى الكتب من <a href="https://shamela.ws" target="_blank" rel="noopener">shamela.ws</a> (المكتبة الشاملة).
+  هذا تطبيق مستقل غير رسمي لقراءة بيانات كتب مستخرجة محليًا، وغير تابع لموقع shamela.ws.
 </div>
 
 <div class="search-bar" id="searchBar" style="display:none">
@@ -35,6 +43,7 @@
 <!-- ============ SCREEN 1: BOOK LIST ============ -->
 <div class="screen" id="libraryScreen">
   <div class="library-count" id="libraryCount"></div>
+  <div class="prefetch-status" id="prefetchStatus" style="display:none"></div>
   <div class="view-tabs" id="viewTabs">
     <button class="view-tab active" data-mode="all">الكل</button>
     <button class="view-tab" data-mode="author">المؤلف</button>
@@ -77,23 +86,31 @@
       <strong>طريقة الإعداد:</strong>
       <ol style="margin:6px 0 0; padding-inline-start:20px;">
         <li>إمّا اضغط <strong>"تنزيل المكتبة تلقائيًا"</strong> أدناه (الملف كبير جدًا: 3.1 جيجابايت، يُفضّل عبر واي فاي)،</li>
-        <li>أو نزّل الملف يدويًا من <a href="https://archive.org/details/maktaba-islamia" target="_blank" rel="noopener">archive.org/details/maktaba-islamia</a>، فك ضغطه بـ <strong>WinRAR</strong> على الكمبيوتر، انسخ المجلد الناتج إلى الهاتف، ثم اضغط <strong>"مجلد كامل"</strong> واخترهُ.</li>
+        <li>أو نزّل الملف يدويًا من <a href="https://archive.org/details/maktaba-islamia" target="_blank" rel="noopener">archive.org/details/maktaba-islamia</a> ثم اضغط <strong>"استيراد ملف مضغوط تم تنزيله"</strong> واخترهُ مباشرة — <u>لا حاجة لفك الضغط</u>،</li>
+        <li>أو إن كان لديك مجلد كتب مستخرَج مسبقًا، اضغط <strong>"مجلد كامل"</strong> واخترهُ.</li>
       </ol>
-      <div style="margin-top:4px;">لا حاجة لتحديد نوع الملفات — يتم التعرّف عليها (JSON أو SQLite) تلقائيًا في الحالتين.</div>
+      <div style="margin-top:4px;">لا حاجة لتحديد نوع الملفات — يتم التعرّف عليها (JSON أو SQLite) تلقائيًا في كل الحالات. تظهر أسماء الكتب سريعًا، ويُحمَّل نص الكتاب عند فتحه لأول مرة.</div>
     </div>
 
     <div class="source-option" id="pickDownloadOption">
       <div class="source-icon">⬇️</div>
       <div>
         <div class="source-title">تنزيل المكتبة تلقائيًا</div>
-        <div class="source-sub">يقوم التطبيق بتنزيل المكتبة كاملة (3.1 جيجابايت، 7683 كتاب) وفك ضغطها واستيرادها تلقائيًا</div>
+        <div class="source-sub">يقوم التطبيق بتنزيل المكتبة كاملة (3.1 جيجابايت) وعرض أسماء كل الكتب فورًا، ويُفتح كل كتاب عند الضغط عليه</div>
+      </div>
+    </div>
+    <div class="source-option" id="pickZipOption">
+      <div class="source-icon">🗜️</div>
+      <div>
+        <div class="source-title">استيراد ملف مضغوط تم تنزيله</div>
+        <div class="source-sub">اخترت الملف المضغوط بنفسك من المتصفح أو أي تطبيق؟ اخترهُ هنا مباشرة، بدون فك الضغط</div>
       </div>
     </div>
     <div class="source-option" id="pickFolderOption">
       <div class="source-icon">📁</div>
       <div>
         <div class="source-title">مجلد كامل (مع مجلداته الفرعية)</div>
-        <div class="source-sub">اختر مجلدًا نزّلته/فككت ضغطه يدويًا، وسيتم قراءة كل ما بداخله تلقائيًا</div>
+        <div class="source-sub">اختر مجلدًا فككت ضغطه، وتظهر أسماء الكتب فورًا. لا تحذف المجلد ولا تنقله لأن الكتب تُقرأ منه عند فتحها</div>
       </div>
     </div>
     <div class="sheet-progress" id="sheetProgress" style="display:none">
