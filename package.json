@@ -1,0 +1,20 @@
+{
+  "name": "maktaba-islamia",
+  "version": "2.0.0",
+  "description": "Maktaba Islamia - offline Islamic book library reader for Android (mobile edition of the islamic-library desktop app)",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/core": "^6.1.2",
+    "@capawesome/capacitor-file-picker": "^6.2.0",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

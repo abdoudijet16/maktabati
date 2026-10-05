@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>مكتبة إسلامية</title>
+<link rel="icon" type="image/png" href="icon/icon.png">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Apply the saved theme before anything is painted (no light/dark flash on start-up).
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) {}
+    if (t !== "dark" && t !== "mushaf") {
+      t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "mushaf";
+    }
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body data-mode="library">
+
+<!-- ============ TOP BAR (icon-only) ============ -->
+<div class="topbar">
+  <button class="icon-btn" id="backBtn" style="display:none" title="رجوع" aria-label="رجوع">
+    <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="icon-btn" id="forwardBtn" style="display:none" title="تقدم" aria-label="تقدم">
+    <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="brand" id="titleBar"><img src="icon/icon.png" class="brand-icon" alt=""><span id="titleBarText">مكتبة إسلامية</span></div>
+  <div class="top-actions">
+    <!-- library -->
+    <button class="icon-btn lib-only" id="searchBtn" title="بحث" aria-label="بحث">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn lib-only" id="creditsBtn" title="حقوق المحتوى" aria-label="حقوق المحتوى">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="11" x2="12" y2="16.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor"/></svg>
+    </button>
+    <button class="icon-btn lib-only" id="settingsBtn" title="الإعدادات" aria-label="الإعدادات">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <!-- reader -->
+    <button class="icon-btn reader-only" id="tocBtn" title="الفهرس والعلامات" aria-label="الفهرس والعلامات">
+      <svg viewBox="0 0 24 24"><line x1="9" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="9" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="9" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="4.8" cy="6" r="1.3" fill="currentColor"/><circle cx="4.8" cy="12" r="1.3" fill="currentColor"/><circle cx="4.8" cy="18" r="1.3" fill="currentColor"/></svg>
+    </button>
+    <button class="icon-btn reader-only" id="favBtn" title="أضف إلى المفضلة" aria-label="المفضلة">
+      <svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.8l6-.8L12 3.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn reader-only" id="bookmarkBtn" title="إشارة مرجعية لهذه الصفحة" aria-label="إشارة مرجعية">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4V3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn reader-only" id="displayBtn" title="الخط والمظهر" aria-label="الخط والمظهر">
+      <span class="aa-glyph">Aa</span>
+    </button>
+  </div>
+</div>
+
+<div class="credits-banner" id="creditsBanner" style="display:none">
+  محتوى الكتب من <a href="https://shamela.ws" target="_blank" rel="noopener">shamela.ws</a> (المكتبة الشاملة).
+  هذا تطبيق مستقل غير رسمي لقراءة بيانات كتب مستخرجة محليًا، وغير تابع لموقع shamela.ws.
+</div>
+
+<div class="search-bar" id="searchBar" style="display:none">
+  <input type="text" id="searchInput" placeholder="ابحث عن كتاب أو مؤلف..." autocomplete="off">
+</div>
+
+<!-- ============ SCREEN 1: LIBRARY ============ -->
+<div class="screen" id="libraryScreen">
+  <div class="library-count" id="libraryCount"></div>
+  <div class="view-tabs" id="viewTabs">
+    <button class="view-tab active" data-mode="all">الكل</button>
+    <button class="view-tab" data-mode="author">المؤلف</button>
+    <button class="view-tab" data-mode="category">التصنيف</button>
+    <button class="view-tab" data-mode="favorites">⭐ المفضلة</button>
+  </div>
+  <div class="group-header" id="groupHeader" style="display:none">
+    <button class="group-back" id="groupBackBtn">‹ رجوع</button>
+    <span id="groupHeaderTitle"></span>
+  </div>
+  <div class="group-list" id="groupList" style="display:none"></div>
+
+  <div id="continueSection" style="display:none">
+    <div class="section-title">متابعة القراءة</div>
+    <div class="continue-row" id="continueRow"></div>
+    <div class="section-title">جميع الكتب</div>
+  </div>
+
+  <div class="book-grid" id="bookGrid"></div>
+  <div id="gridSentinel" style="height:1px"></div>
+  <div class="empty-msg" id="listMsg" style="display:none"></div>
+  <div class="empty-state" id="emptyState" style="display:none">
+    <div class="empty-icon">📖</div>
+    <p>لا توجد كتب بعد</p>
+    <button class="primary-btn" id="emptyOpenSettings">إضافة مكتبة الكتب</button>
+  </div>
+  <div class="library-footer">المحتوى من <a href="https://shamela.ws" target="_blank" rel="noopener">المكتبة الشاملة — shamela.ws</a></div>
+</div>
+
+<!-- ============ SCREEN 2: READER ============ -->
+<div class="screen" id="readerScreen" style="display:none">
+  <div class="reader-pager" id="readerPager">
+    <div class="page-slide" id="pageText"></div>
+  </div>
+  <div class="reader-footer">
+    <button class="page-nav" id="prevPageBtn" aria-label="الصفحة السابقة">‹</button>
+    <div class="page-jump">
+      <input type="number" id="pageInput" inputmode="numeric" min="1" value="1" aria-label="رقم الصفحة">
+      <span id="pageTotal">/ 1</span>
+    </div>
+    <button class="page-nav" id="nextPageBtn" aria-label="الصفحة التالية">›</button>
+  </div>
+</div>
+
+<!-- ============ TABLE OF CONTENTS + BOOKMARKS SHEET ============ -->
+<div class="sheet-overlay" id="tocOverlay" style="display:none">
+  <div class="sheet sheet-tall">
+    <div class="sheet-handle"></div>
+    <div class="view-tabs sheet-tabs">
+      <button class="view-tab active" id="tabToc">الفهرس</button>
+      <button class="view-tab" id="tabMarks">العلامات المرجعية</button>
+    </div>
+    <div id="tocList" class="toc-list"></div>
+    <div id="marksList" class="toc-list" style="display:none"></div>
+    <div class="sheet-actions"><span></span><button class="primary-btn" id="closeTocBtn">إغلاق</button></div>
+  </div>
+</div>
+
+<!-- ============ FONT / THEME SHEET ============ -->
+<div class="sheet-overlay" id="displayOverlay" style="display:none">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h2>الخط والمظهر</h2>
+
+    <div class="opt-label">حجم الخط</div>
+    <div class="size-row">
+      <button class="font-btn" id="fontMinus" aria-label="تصغير الخط">أ-</button>
+      <div class="size-value" id="fontSizeValue">22</div>
+      <button class="font-btn" id="fontPlus" aria-label="تكبير الخط">أ+</button>
+    </div>
+
+    <div class="opt-label">نوع الخط</div>
+    <div class="view-tabs chip-tabs">
+      <button class="view-tab" data-font="amiri">أميري</button>
+      <button class="view-tab" data-font="noto">نوتو نسخ</button>
+    </div>
+
+    <div class="opt-label">المظهر</div>
+    <div class="view-tabs chip-tabs">
+      <button class="view-tab theme-chip" data-theme-value="mushaf">🌤 فاتح</button>
+      <button class="view-tab theme-chip" data-theme-value="dark">🌙 داكن</button>
+    </div>
+
+    <div class="sheet-actions"><span></span><button class="primary-btn" id="closeDisplayBtn">تم</button></div>
+  </div>
+</div>
+
+<!-- ============ SETTINGS / DATABASE SOURCE SHEET ============ -->
+<div class="sheet-overlay" id="settingsOverlay" style="display:none">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h2>مصدر مكتبة الكتب</h2>
+    <p class="sheet-desc">اختر كيف تريد تحميل قاعدة بيانات الكتب على الهاتف.</p>
+
+    <div class="opt-label">المظهر</div>
+    <div class="view-tabs chip-tabs" style="padding:0 0 12px;">
+      <button class="view-tab theme-chip" data-theme-value="mushaf">🌤 فاتح</button>
+      <button class="view-tab theme-chip" data-theme-value="dark">🌙 داكن</button>
+    </div>
+
+    <div class="setup-notice">
+      <strong>طريقة الإعداد:</strong>
+      <ol>
+        <li>فُكّ ضغط الكتب بنفسك داخل مجلد <strong>maktaba</strong>، كل كتاب في مجلد تصنيفه.</li>
+        <li>ضع ملف <strong>catalog.csv</strong> بجانب مجلدات التصنيفات داخل المجلد نفسه (الأعمدة: <span dir="ltr">title,author,category,file</span>).</li>
+        <li>اضغط <strong>"مجلد المكتبة"</strong> أدناه واختر مجلد maktaba.</li>
+      </ol>
+      <div style="margin-top:4px;">تظهر الكتب في المكتبة من الفهرس فورًا، ولا يُقرأ نص الكتاب إلا عند الضغط عليه.</div>
+    </div>
+
+    <div class="source-option" id="pickFolderOption">
+      <div class="source-icon">📁</div>
+      <div>
+        <div class="source-title">مجلد المكتبة (maktaba)</div>
+        <div class="source-sub">يُقرأ ملف catalog.csv تلقائيًا من داخله. لا تحذف المجلد ولا تنقله لأن الكتب تُقرأ منه عند فتحها</div>
+      </div>
+    </div>
+    <div class="source-option" id="rescanOption" style="display:none">
+      <div class="source-icon">🔄</div>
+      <div>
+        <div class="source-title">إعادة الفهرسة</div>
+        <div class="source-sub">ابحث في المجلد المختار سابقًا عن كتب جديدة دون اختياره من جديد (لا يُعاد استيراد الكتب الموجودة، ولا تُمسح المفضلة أو العلامات)</div>
+      </div>
+    </div>
+    <div class="sheet-progress" id="sheetProgress" style="display:none">
+      <div class="sheet-progress-bar"><div class="sheet-progress-fill" id="progressFill"></div></div>
+      <div id="progressLabel">جارٍ التحميل...</div>
+    </div>
+
+    <div class="sheet-stats" id="sheetStats"></div>
+    <div class="sheet-actions">
+      <button class="text-btn" id="clearLibraryBtn">مسح المكتبة الحالية</button>
+      <button class="primary-btn" id="closeSheetBtn">تم</button>
+    </div>
+
+    <!-- DEBUG LOG: shows every error/step on-screen so it can be screenshotted,
+         no computer/USB debugging needed. -->
+    <div id="debugLogBox" style="display:none; margin-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong style="font-size:13px;">سجل التشخيص</strong>
+        <button class="text-btn" id="copyDebugLogBtn" style="font-size:12px;">نسخ</button>
+      </div>
+      <pre id="debugLogText" style="direction:ltr; text-align:left; font-size:11px; max-height:160px; overflow:auto; background:#111; color:#0f0; padding:8px; border-radius:6px; white-space:pre-wrap; word-break:break-all;"></pre>
+    </div>
+
+    <div class="credit-line">
+      محتوى الكتب مصدره <a href="https://shamela.ws" target="_blank" rel="noopener">المكتبة الشاملة — shamela.ws</a>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

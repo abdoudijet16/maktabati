@@ -1,0 +1,11 @@
+{
+  "appId": "com.maktaba.islamia",
+  "appName": "مكتبة إسلامية",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
