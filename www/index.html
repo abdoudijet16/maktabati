@@ -172,7 +172,7 @@
       <strong>طريقة الإعداد:</strong>
       <ol>
         <li>فُكّ ضغط الكتب بنفسك داخل مجلد <strong>maktaba</strong>، كل كتاب في مجلد تصنيفه.</li>
-        <li>ضع ملف <strong>catalog.csv</strong> بجانب مجلدات التصنيفات داخل المجلد نفسه (الأعمدة: <span dir="ltr">title,author,category,file</span>).</li>
+        <li>ضع ملف <strong>catalog.csv</strong> بجانب مجلدات التصنيفات داخل المجلد نفسه (الأعمدة: <span dir="ltr">title,author,category,file</span>). يمكنك أيضًا نسخه بزر <strong>"نسخ ملف الفهرس"</strong> بعد اختيار المجلد.</li>
         <li>اضغط <strong>"مجلد المكتبة"</strong> أدناه واختر مجلد maktaba.</li>
       </ol>
       <div style="margin-top:4px;">تظهر الكتب في المكتبة من الفهرس فورًا، ولا يُقرأ نص الكتاب إلا عند الضغط عليه.</div>
@@ -190,6 +190,13 @@
       <div>
         <div class="source-title">إعادة الفهرسة</div>
         <div class="source-sub">ابحث في المجلد المختار سابقًا عن كتب جديدة دون اختياره من جديد (لا يُعاد استيراد الكتب الموجودة، ولا تُمسح المفضلة أو العلامات)</div>
+      </div>
+    </div>
+    <div class="source-option" id="catalogOption" style="display:none">
+      <div class="source-icon">📄</div>
+      <div>
+        <div class="source-title">نسخ ملف الفهرس (CSV) إلى المجلد</div>
+        <div class="source-sub">اختر ملف catalog.csv من هاتفك؛ يُفحص أولًا للتأكد من وجود كتبه في المجلد، ثم يُنسخ إلى مجلد المكتبة وتُعاد الفهرسة</div>
       </div>
     </div>
     <div class="sheet-progress" id="sheetProgress" style="display:none">

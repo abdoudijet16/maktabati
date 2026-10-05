@@ -171,6 +171,10 @@ public class FolderImporterPlugin extends Plugin {
 
     private void launchFolderPicker(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
         startActivityForResult(call, intent, "handlePickFolderResult");
     }
 
@@ -190,12 +194,15 @@ public class FolderImporterPlugin extends Plugin {
         }
 
         try {
+            // read + write: write is needed to copy catalog.csv into the folder from the app
             getContext().getContentResolver().takePersistableUriPermission(
                 treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             );
-        } catch (Exception ignored) {
-            // Not fatal if this fails - we still have read access for this session.
+        } catch (Exception e) {
+            try { // this folder cannot be written to: keep read access, as before
+                getContext().getContentResolver().takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) { /* still have read access for this session */ }
         }
 
         startImport(call, treeUri);
@@ -339,6 +346,93 @@ public class FolderImporterPlugin extends Plugin {
                 stream.close();
                 bookStreams.remove(id);
                 call.reject("تعذّر قراءة الكتاب: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /**
+     * Picks a catalog CSV (text types only) and returns { name, base64 }. A catalog is a small
+     * text file, so anything over 5 MB is refused instead of being read into memory.
+     */
+    @PluginMethod
+    public void pickCatalogFile(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+            "text/csv", "text/comma-separated-values", "text/plain", "text/tab-separated-values",
+            "application/csv", "application/vnd.ms-excel", "application/octet-stream"
+        });
+        startActivityForResult(call, intent, "handlePickCatalogResult");
+    }
+
+    @ActivityCallback
+    private void handlePickCatalogResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+            call.reject("تم إلغاء اختيار الملف.");
+            return;
+        }
+        Uri uri = result.getData().getData();
+        final int max = 5 * 1024 * 1024;
+        try (InputStream in = getContext().getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IOException("cannot open");
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int n;
+            while ((n = in.read(chunk)) != -1) {
+                buffer.write(chunk, 0, n);
+                if (buffer.size() > max) {
+                    call.reject("الملف كبير جدًا لأن يكون ملف فهرس (أكثر من 5 ميجابايت).");
+                    return;
+                }
+            }
+            JSObject ret = new JSObject();
+            ret.put("name", queryDisplayName(uri));
+            ret.put("base64", Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP));
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("خطأ أثناء قراءة الملف: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Compares a catalog CSV (sent as base64) with the books in the picked folder, WITHOUT
+     * copying anything: { rows, found, missing, missingSample, jsonInFolder, unlisted,
+     * hasExisting, canWrite }.
+     */
+    @PluginMethod
+    public void checkCatalog(PluginCall call) {
+        final String treeUri = call.getString("treeUri");
+        final String b64 = call.getString("base64");
+        if (treeUri == null || treeUri.isEmpty() || b64 == null) { call.reject("بيانات ناقصة."); return; }
+        new Thread(() -> {
+            try {
+                byte[] csv = Base64.decode(b64, Base64.DEFAULT);
+                call.resolve(CatalogInstaller.check(getContext(), Uri.parse(treeUri), csv));
+            } catch (Exception e) {
+                call.reject("تعذّر فحص ملف الفهرس: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** Copies the CSV (base64) into the picked folder as catalog.csv, replacing an existing one. */
+    @PluginMethod
+    public void installCatalog(PluginCall call) {
+        final String treeUri = call.getString("treeUri");
+        final String b64 = call.getString("base64");
+        if (treeUri == null || treeUri.isEmpty() || b64 == null) { call.reject("بيانات ناقصة."); return; }
+        new Thread(() -> {
+            try {
+                byte[] csv = Base64.decode(b64, Base64.DEFAULT);
+                CatalogInstaller.install(getContext(), Uri.parse(treeUri), csv);
+                JSObject ret = new JSObject();
+                ret.put("name", CatalogInstaller.TARGET_NAME);
+                call.resolve(ret);
+            } catch (SecurityException e) {
+                call.reject("NO_WRITE: لا توجد صلاحية الكتابة في هذا المجلد.");
+            } catch (Exception e) {
+                call.reject("تعذّر نسخ الملف: " + e.getMessage());
             }
         }).start();
     }

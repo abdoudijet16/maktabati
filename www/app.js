@@ -1117,6 +1117,7 @@ const settingsEls = {
   overlay: els.settingsOverlay,
   folderOption: $("pickFolderOption"),
   rescanOption: $("rescanOption"),
+  catalogOption: $("catalogOption"),
   progress: $("sheetProgress"),
   progressFill: $("progressFill"),
   progressLabel: $("progressLabel"),
@@ -1141,7 +1142,9 @@ async function updateStats() {
   // import option. The delete button reappears as soon as a library exists.
   settingsEls.clearBtn.style.display = books.length ? "" : "none";
   // Re-indexing needs a folder that was picked before.
-  settingsEls.rescanOption.style.display = prefGet("maktaba_tree_uri", "") ? "flex" : "none";
+  const hasFolder = !!prefGet("maktaba_tree_uri", "");
+  settingsEls.rescanOption.style.display = hasFolder ? "flex" : "none";
+  settingsEls.catalogOption.style.display = hasFolder ? "flex" : "none";
 }
 
 els.settingsBtn.onclick = openSettings;
@@ -1278,7 +1281,7 @@ settingsEls.folderOption.onclick = async () => {
 // Re-index: scan the already-picked folder again for new books (no folder picker).
 // Books already in the library are skipped, so ids, favorites, bookmarks and
 // reading progress are untouched.
-settingsEls.rescanOption.onclick = async () => {
+async function runRescan() {
   const treeUri = prefGet("maktaba_tree_uri", "");
   if (!treeUri || !FolderImporter) return;
   debugLog("إعادة الفهرسة للمجلد المختار سابقًا.");
@@ -1299,6 +1302,80 @@ settingsEls.rescanOption.onclick = async () => {
     return;
   }
   await finishImport(out, true);
+}
+settingsEls.rescanOption.onclick = runRescan;
+
+// Copy a catalog CSV into the library folder - but only after checking that the books it
+// lists are really in that folder. Nothing is copied when none of them are.
+const NO_WRITE_MSG = "لا توجد صلاحية الكتابة في مجلد المكتبة.\nاضغط \"مجلد المكتبة (maktaba)\" واختر المجلد من جديد (وامنح التطبيق صلاحية التعديل)، ثم أعد المحاولة.";
+
+settingsEls.catalogOption.onclick = async () => {
+  const treeUri = prefGet("maktaba_tree_uri", "");
+  if (!FolderImporter) { alert("هذه الميزة غير متوفرة في هذا الإصدار من التطبيق."); return; }
+  if (!treeUri) { alert("اختر مجلد المكتبة أولًا."); return; }
+
+  let file;
+  try {
+    file = await FolderImporter.pickCatalogFile();
+  } catch (err) {
+    const msg = (err && err.message) || "";
+    if (!/cancel|إلغاء/i.test(msg)) alert(msg || "تعذّر اختيار الملف.");
+    return;
+  }
+  debugLog(`تم اختيار ملف الفهرس: ${file.name}`);
+  if (!/\.(csv|tsv|txt)$/i.test(file.name || "")) {
+    alert(`الملف "${file.name}" ليس ملف CSV. اختر ملفًا بامتداد .csv`);
+    return;
+  }
+
+  showProgress(true);
+  setProgress(0, 0, "جارٍ فحص ملف الفهرس والمجلد...");
+  let r;
+  try {
+    r = await FolderImporter.checkCatalog({ treeUri, base64: file.base64 });
+  } catch (err) {
+    showProgress(false);
+    debugLog("فشل فحص الفهرس: " + (err && err.message || err));
+    alert(err && err.message || "تعذّر فحص ملف الفهرس.");
+    return;
+  }
+  showProgress(false);
+  debugLog(`فحص الفهرس: ${r.rows} صف، ${r.found} موجود، ${r.missing} غير موجود، ${r.unlisted} كتاب في المجلد غير مذكور.`);
+
+  if (!r.rows) {
+    alert("لا يحتوي الملف على أي كتب.\nتأكد أن الصف الأول عناوين الأعمدة: title,author,category,file");
+    return;
+  }
+  const sample = (r.missingSample || []).map((x) => "• " + x).join("\n");
+  if (!r.found) {
+    alert(`لم يتم النسخ: لم يُعثر على أي كتاب من الفهرس (${r.rows} كتاب) داخل مجلد المكتبة.\n\n` +
+      "تأكد أن ملفات الكتب (.json) داخل المجلد الذي اخترته، وأن عمود file يطابق أسماءها.\n\n" +
+      (sample ? "أمثلة على الكتب غير الموجودة:\n" + sample : ""));
+    return;
+  }
+  if (!r.canWrite) { alert(NO_WRITE_MSG); return; }
+
+  let msg = `نتيجة الفحص:\n✔ ${r.found} من ${r.rows} كتاب موجودة في المجلد.`;
+  if (r.missing) msg += `\n✖ ${r.missing} كتاب غير موجودة (ستظهر في المكتبة لكن لن تُفتح):\n${sample}${r.missing > (r.missingSample || []).length ? "\n…" : ""}`;
+  if (r.unlisted) msg += `\nℹ ${r.unlisted} كتاب داخل المجلد غير مذكورة في هذا الفهرس (لن تظهر).`;
+  if (r.hasExisting) msg += "\n\nسيُستبدل ملف catalog.csv الموجود في المجلد.";
+  msg += "\n\nهل تريد نسخ الملف إلى مجلد المكتبة؟";
+  if (!confirm(msg)) return;
+
+  showProgress(true);
+  setProgress(0, 0, "جارٍ نسخ الملف إلى المجلد...");
+  try {
+    await FolderImporter.installCatalog({ treeUri, base64: file.base64 });
+  } catch (err) {
+    showProgress(false);
+    const m = (err && err.message) || "";
+    debugLog("فشل نسخ الفهرس: " + m);
+    alert(/NO_WRITE/.test(m) ? NO_WRITE_MSG : (m || "تعذّر نسخ الملف."));
+    return;
+  }
+  debugLog("تم نسخ catalog.csv إلى المجلد.");
+  toast("تم نسخ catalog.csv إلى المجلد");
+  await runRescan(); // index the books it lists
 };
 
 /* ---------------- Boot ---------------- */

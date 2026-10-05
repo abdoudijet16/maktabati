@@ -36,12 +36,41 @@ final class CatalogReader {
     private static final String[] H_FILE = {"file", "filename", "file_name", "path", "relpath", "ملف", "اسم الملف", "المسار"};
     private static final String[] H_PAGES = {"pages", "page_count", "عدد الصفحات"};
 
+    /** One catalog row: the book's display data and where its file should be (relative to the maktaba folder). */
+    static final class Entry {
+        String title, author, category, rel;
+        int pages;
+    }
+
     /** Returns the number of books indexed; rows without a title are counted in skipped[0]. */
     static int read(InputStream in, String treeUri, BookIndexer.Batch batch, int[] skipped) throws IOException {
-        String text = new String(BookIndexer.readFully(in), StandardCharsets.UTF_8);
+        String text = decode(BookIndexer.readFully(in));
+        int count = 0;
+        for (Entry e : parseEntries(text, skipped)) {
+            JSObject o = new JSObject();
+            o.put("title", e.title);
+            if (!e.author.isEmpty()) o.put("author", e.author);
+            if (!e.category.isEmpty()) o.put("category", e.category);
+            o.put("pageCount", e.pages);
+            o.put("source", "catalog");
+            o.put("ref", treeUri + "|" + e.rel);
+            batch.add(o);
+            count++;
+        }
+        return count;
+    }
+
+    static String decode(byte[] data) {
+        String text = new String(data, StandardCharsets.UTF_8);
         if (!text.isEmpty() && text.charAt(0) == '\uFEFF') text = text.substring(1); // BOM from Excel
+        return text;
+    }
+
+    /** Parses the CSV text into entries (the single place that knows the column rules). */
+    static List<Entry> parseEntries(String text, int[] skipped) {
+        List<Entry> out = new ArrayList<>();
         List<String[]> rows = parse(text);
-        if (rows.isEmpty()) return 0;
+        if (rows.isEmpty()) return out;
 
         String[] header = rows.get(0);
         int iTitle = find(header, H_TITLE);
@@ -55,31 +84,22 @@ final class CatalogReader {
             start = 0;
         }
 
-        int count = 0;
         for (int r = start; r < rows.size(); r++) {
             String[] row = rows.get(r);
             String title = cell(row, iTitle);
             if (title.isEmpty()) { skipped[0]++; continue; }
-            String author = cell(row, iAuthor);
-            String category = cell(row, iCategory);
+            Entry e = new Entry();
+            e.title = title;
+            e.author = cell(row, iAuthor);
+            e.category = cell(row, iCategory);
             String file = cell(row, iFile).replace('\\', '/');
             if (file.isEmpty()) file = title;
             if (!file.toLowerCase().endsWith(".json")) file = file + ".json";
-            String rel = (file.contains("/") || category.isEmpty()) ? file : category + "/" + file;
-
-            JSObject o = new JSObject();
-            o.put("title", title);
-            if (!author.isEmpty()) o.put("author", author);
-            if (!category.isEmpty()) o.put("category", category);
-            int pages = 0;
-            try { pages = Integer.parseInt(cell(row, iPages)); } catch (NumberFormatException ignored) {}
-            o.put("pageCount", pages);
-            o.put("source", "catalog");
-            o.put("ref", treeUri + "|" + rel);
-            batch.add(o);
-            count++;
+            e.rel = (file.contains("/") || e.category.isEmpty()) ? file : e.category + "/" + file;
+            try { e.pages = Integer.parseInt(cell(row, iPages)); } catch (NumberFormatException ignored) {}
+            out.add(e);
         }
-        return count;
+        return out;
     }
 
     private static String cell(String[] row, int i) {

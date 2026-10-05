@@ -14,6 +14,8 @@ The Android edition of the **islamic-library** desktop app (v2.0 brings it up to
 - **Re-index** (settings): scans the folder you picked earlier for newly added books without picking it again. Existing books, favorites, bookmarks and progress are never touched.
 - Reading position is saved automatically on every page.
 
+- **Copy catalog.csv into the folder** (settings): pick a CSV from your phone; the app first checks it against the folder (how many of its books are really there, how many are missing, how many books in the folder it doesn't list). Nothing is copied if none of its books are found; otherwise you see the result and confirm. An existing `catalog.csv` is replaced (and restored if the copy fails), then the folder is re-indexed. This needs write access to the folder: if you picked it with an older version, pick it once more.
+
 **Nothing is loaded until you choose a book.** Importing only builds the list (from `catalog.csv`, or the first 8 KB header of each book file if there is no catalog). A book's text is read from the `maktaba` folder only when you tap it (streamed, so size doesn't matter), and its table of contents only when you open the contents list. Whole database files (`.db` / `.sqlite`) are no longer imported, because they would load many books at once.
 
 This is a [Capacitor](https://capacitorjs.com) project: the `www/` folder is the actual app (plain HTML/CSS/JS, no build step needed to *edit* it), and `android/` is the generated native Android Studio project that wraps it into a real `.apk`.
