@@ -1,6 +1,6 @@
 {
   "name": "maktaba-islamia",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Maktaba Islamia - offline Islamic book library reader for Android (mobile edition of the islamic-library desktop app)",
   "private": true,
   "scripts": {

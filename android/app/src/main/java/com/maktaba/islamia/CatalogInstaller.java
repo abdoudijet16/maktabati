@@ -11,6 +11,7 @@ import com.getcapacitor.JSObject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -79,6 +80,67 @@ final class CatalogInstaller {
         ret.put("hasExisting", existing != null && existing.isFile());
         ret.put("canWrite", root.canWrite());
         return ret;
+    }
+
+    /**
+     * Builds catalog.csv from the books that are already in the folder and writes it into the
+     * folder root. Only the first few KB of each book file is read (title / author / category /
+     * page count), never the book text. Result: { count, skipped }.
+     */
+    static JSObject generate(Context ctx, Uri tree) throws IOException {
+        DocumentFile root = DocumentFile.fromTreeUri(ctx, tree);
+        if (root == null || !root.exists()) throw new IOException("مجلد المكتبة غير متاح. اختره من جديد.");
+        if (!root.canWrite()) throw new SecurityException("no write access");
+
+        List<String[]> rows = new ArrayList<>(); // {title, author, category, file, pages}
+        int[] skipped = {0};
+        scan(ctx, root, "", "", 0, rows, skipped);
+        if (rows.isEmpty()) throw new IOException("لم يُعثر على أي ملف كتاب (.json) داخل المجلد.");
+
+        StringBuilder sb = new StringBuilder("\uFEFFtitle,author,category,file,pages\r\n");
+        for (String[] r : rows) {
+            for (int i = 0; i < r.length; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(quote(r[i]));
+            }
+            sb.append("\r\n");
+        }
+        install(ctx, tree, sb.toString().getBytes(StandardCharsets.UTF_8));
+
+        JSObject ret = new JSObject();
+        ret.put("count", rows.size());
+        ret.put("skipped", skipped[0]);
+        return ret;
+    }
+
+    private static void scan(Context ctx, DocumentFile dir, String rel, String folderName, int depth,
+                             List<String[]> rows, int[] skipped) {
+        if (depth > MAX_DEPTH) return;
+        DocumentFile[] kids = dir.listFiles();
+        if (kids == null) return;
+        for (DocumentFile k : kids) {
+            String n = k.getName();
+            if (n == null) continue;
+            String childRel = rel.isEmpty() ? n : rel + "/" + n;
+            if (k.isDirectory()) {
+                scan(ctx, k, childRel, n, depth + 1, rows, skipped);
+            } else if (k.isFile() && n.toLowerCase().endsWith(".json")) {
+                try (InputStream in = ctx.getContentResolver().openInputStream(k.getUri())) {
+                    if (in == null) { skipped[0]++; continue; }
+                    JSObject m = BookIndexer.readMeta(in, n, folderName, "saf", "");
+                    rows.add(new String[] {
+                        m.optString("title", ""), m.optString("author", ""), m.optString("category", ""),
+                        childRel, String.valueOf(m.optInt("pageCount", 0))
+                    });
+                } catch (Exception e) {
+                    skipped[0]++;
+                }
+            }
+        }
+    }
+
+    private static String quote(String v) {
+        return "\"" + (v == null ? "" : v.replace("\"", "\"\"")) + "\"";
     }
 
     private static void collect(DocumentFile dir, String rel, int depth, List<String[]> out) {

@@ -1118,6 +1118,7 @@ const settingsEls = {
   folderOption: $("pickFolderOption"),
   rescanOption: $("rescanOption"),
   catalogOption: $("catalogOption"),
+  generateOption: $("generateCatalogOption"),
   progress: $("sheetProgress"),
   progressFill: $("progressFill"),
   progressLabel: $("progressLabel"),
@@ -1145,6 +1146,7 @@ async function updateStats() {
   const hasFolder = !!prefGet("maktaba_tree_uri", "");
   settingsEls.rescanOption.style.display = hasFolder ? "flex" : "none";
   settingsEls.catalogOption.style.display = hasFolder ? "flex" : "none";
+  settingsEls.generateOption.style.display = hasFolder ? "flex" : "none";
 }
 
 els.settingsBtn.onclick = openSettings;
@@ -1187,14 +1189,21 @@ function setProgress(done, total, label) {
 // code sends the books as small index entries in batches ("libraryIndexBatch");
 // each batch is saved in one quick database write. Nothing else is read.
 async function runNativeImport({ fileEvent, skipEvent, extraListeners, startCall }) {
-  const existing = new Set((await getAllBooks()).map((b) => b.ref).filter(Boolean));
+  const allBooks = await getAllBooks();
+  const existing = new Set(allBooks.map((b) => b.ref).filter(Boolean));
+  // Books listed earlier straight from the book files (no catalog yet) have a different ref
+  // than the same book listed through a catalog; match those by title + author so a new
+  // catalog never shows them twice (and their favorites / bookmarks / progress stay).
+  const keyOf = (t, a) => normalizeAr(`${t || ""}|${a || ""}`);
+  const fileBooks = new Set(allBooks.filter((b) => b.source === "saf").map((b) => keyOf(b.title, b.author)));
   const out = { indexed: 0, duplicates: 0, skippedCount: 0, result: null };
   let writeChain = Promise.resolve();
   const listeners = [];
 
   listeners.push(await FolderImporter.addListener("libraryIndexBatch", (batch) => {
     const all = batch.items || [];
-    const items = all.filter((it) => it.ref && !existing.has(it.ref));
+    const items = all.filter((it) => it.ref && !existing.has(it.ref) &&
+      !(it.source === "catalog" && fileBooks.has(keyOf(it.title, it.author))));
     out.duplicates += all.length - items.length;
     items.forEach((it) => existing.add(it.ref));
     writeChain = writeChain
@@ -1304,6 +1313,34 @@ async function runRescan() {
   await finishImport(out, true);
 }
 settingsEls.rescanOption.onclick = runRescan;
+
+// Create catalog.csv from the books already in the folder (reads each book's header only).
+settingsEls.generateOption.onclick = async () => {
+  const treeUri = prefGet("maktaba_tree_uri", "");
+  if (!FolderImporter) { alert("هذه الميزة غير متوفرة في هذا الإصدار من التطبيق."); return; }
+  if (!treeUri) { alert("اختر مجلد المكتبة أولًا."); return; }
+  if (!confirm(
+    "سيقرأ التطبيق عنوان كل كتاب ومؤلفه وتصنيفه من ملفات الكتب في المجلد (دون تحميل نصوصها)، ثم ينشئ ملف catalog.csv داخل المجلد نفسه.\n\n" +
+    "إن وُجد ملف catalog.csv سابق فسيُستبدل.\n\nهل تريد المتابعة؟"
+  )) return;
+
+  showProgress(true);
+  setProgress(0, 0, "جارٍ قراءة الكتب وإنشاء ملف الفهرس... قد يستغرق ذلك دقيقة مع المكتبات الكبيرة");
+  let r;
+  try {
+    r = await FolderImporter.generateCatalog({ treeUri });
+  } catch (err) {
+    showProgress(false);
+    const m = (err && err.message) || "";
+    debugLog("فشل إنشاء الفهرس: " + m);
+    alert(/NO_WRITE/.test(m) ? NO_WRITE_MSG : (m || "تعذّر إنشاء ملف الفهرس."));
+    return;
+  }
+  debugLog(`تم إنشاء catalog.csv: ${r.count} كتاب، تم تجاوز ${r.skipped}.`);
+  toast("تم إنشاء catalog.csv");
+  alert(`تم إنشاء ملف catalog.csv داخل مجلد المكتبة.\nعدد الكتب فيه: ${r.count}` + (r.skipped ? `\nتعذّرت قراءة ${r.skipped} ملف.` : ""));
+  await runRescan(); // list the books through the new catalog
+};
 
 // Copy a catalog CSV into the library folder - but only after checking that the books it
 // lists are really in that folder. Nothing is copied when none of them are.

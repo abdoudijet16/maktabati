@@ -416,6 +416,22 @@ public class FolderImporterPlugin extends Plugin {
         }).start();
     }
 
+    /** Creates catalog.csv inside the picked folder from the books found there (headers only). */
+    @PluginMethod
+    public void generateCatalog(PluginCall call) {
+        final String treeUri = call.getString("treeUri");
+        if (treeUri == null || treeUri.isEmpty()) { call.reject("لم يتم اختيار مجلد المكتبة من قبل."); return; }
+        new Thread(() -> {
+            try {
+                call.resolve(CatalogInstaller.generate(getContext(), Uri.parse(treeUri)));
+            } catch (SecurityException e) {
+                call.reject("NO_WRITE: لا توجد صلاحية الكتابة في هذا المجلد.");
+            } catch (Exception e) {
+                call.reject("تعذّر إنشاء ملف الفهرس: " + e.getMessage());
+            }
+        }).start();
+    }
+
     /** Copies the CSV (base64) into the picked folder as catalog.csv, replacing an existing one. */
     @PluginMethod
     public void installCatalog(PluginCall call) {
